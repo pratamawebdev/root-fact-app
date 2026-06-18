@@ -7,6 +7,10 @@ const WorkboxWebpackPlugin = require("workbox-webpack-plugin");
 module.exports = merge(common, {
   mode: "production",
   devtool: false,
+  output: {
+    filename: "[name].[contenthash].bundle.js",
+    publicPath: "/",
+  },
   module: {
     rules: [
       {

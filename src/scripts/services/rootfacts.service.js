@@ -1,6 +1,17 @@
-import { pipeline, env } from "@huggingface/transformers";
 import { APP_CONFIG } from "../config.js";
 import { isWebGPUSupported } from "../utils/index.js";
+
+let transformersModulePromise = null;
+
+async function loadTransformersModule() {
+  if (!transformersModulePromise) {
+    transformersModulePromise = import(
+      /* webpackIgnore: true */ "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js"
+    );
+  }
+
+  return transformersModulePromise;
+}
 
 class RootFactsService {
   constructor() {
@@ -19,6 +30,8 @@ class RootFactsService {
   }
 
   async loadModel() {
+    const { pipeline, env } = await loadTransformersModule();
+
     env.allowLocalModels = false;
     env.useBrowserCache = true;
 
