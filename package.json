@@ -6,20 +6,22 @@
     "build": "webpack --config webpack.prod.js",
     "start-dev": "webpack serve --config webpack.dev.js",
     "serve": "http-server dist",
+    "lint": "eslint .",
     "prettier": "prettier . --check",
-    "prettier:write": "prettier . --write",
-    "lint": "eslint src/scripts/**/*.js webpack.*.js",
-    "lint:fix": "eslint src/scripts/**/*.js webpack.*.js --fix"
+    "prettier:write": "prettier . --write"
   },
   "keywords": [],
   "author": "YOUR_NAME <yourmail@mail.com>",
   "license": "ISC",
   "devDependencies": {
     "@babel/preset-env": "^7.28.5",
+    "@eslint/js": "^9.18.0",
     "babel-loader": "^10.0.0",
     "clean-webpack-plugin": "^4.0.0",
     "copy-webpack-plugin": "^13.0.1",
     "css-loader": "^7.1.2",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
     "html-webpack-plugin": "^5.6.4",
     "http-server": "^14.1.1",
     "mini-css-extract-plugin": "^2.9.4",
@@ -29,8 +31,7 @@
     "webpack-cli": "^6.0.1",
     "webpack-dev-server": "^5.2.2",
     "webpack-merge": "^6.0.1",
-    "workbox-webpack-plugin": "^7.3.0",
-    "eslint": "^8.57.1"
+    "workbox-webpack-plugin": "^7.3.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",

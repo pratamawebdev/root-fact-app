@@ -44,10 +44,25 @@ module.exports = {
     }),
     new CopyWebpackPlugin({
       patterns: [
-        { from: path.resolve(__dirname, "src/public"), to: path.resolve(__dirname, "dist") },
-        { from: path.resolve(__dirname, "src/model"), to: path.resolve(__dirname, "dist/model") },
+        // Served at /model/model.json and /model/weights.bin so tfjs can
+        // fetch them at runtime, and so Workbox can precache them for
+        // offline detection (see webpack.prod.js).
+        {
+          from: path.resolve(__dirname, "src/model"),
+          to: path.resolve(__dirname, "dist/model"),
+        },
+        // favicon.ico, /icons/*, and manifest.json land at the dist root.
+        {
+          from: path.resolve(__dirname, "src/public"),
+          to: path.resolve(__dirname, "dist"),
+          globOptions: {
+            // Empty placeholder folder, nothing to copy yet.
+            ignore: ["**/screenshots/**"],
+          },
+          noErrorOnMissing: true,
+        },
       ],
-    })
+    }),
   ],
   stats: {
     warningsFilter: /import\.meta/,

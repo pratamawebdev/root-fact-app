@@ -1,145 +1,214 @@
-import CameraService from "../../services/camera.service.js";
-import DetectionService from "../../services/detection.service.js";
-import RootFactsService from "../../services/rootfacts.service.js";
 import { APP_CONFIG } from "../../config.js";
+import { isValidDetection, createDelay, logError } from "../../utils/index.js";
 
-class HomePresenter {
-  constructor({ view }) {
-    this.view = view;
-    this.cameraService = new CameraService();
-    this.detectionService = new DetectionService();
-    this.rootFactsService = new RootFactsService();
-    this.isScanning = false;
-    this.detectionTimer = null;
-    this.lastDetectedLabel = "";
-    this.lastGeneratedAt = 0;
-    this.fps = 30;
+const VIDEO_ID = "media-video";
+const CANVAS_ID = "media-canvas";
+
+/**
+ * Presenter (MVP) - alur deteksi:
+ *   1. User ketuk toggle → kamera hidup, loop mulai
+ *   2. Loop dapat deteksi valid (confidence > threshold) →
+ *      LANGSUNG stop loop + kamera, tampilkan hasil, generate fun fact
+ *   3. User baca hasil → ketuk toggle lagi untuk scan ulang
+ *
+ * Tidak ada re-konfirmasi kedua — itu penyebab "scan ulang pas gerak dikit".
+ */
+export default class HomePresenter {
+  #view;
+  #cameraService;
+  #detectionService;
+  #rootFactsService;
+
+  #isScanning = false;
+  #isBusy = false;
+  #loopTimeoutId = null;
+  #currentLabel = null;
+  #currentTone = "normal";
+  #lastFact = "";
+  #loadProgress = { vision: 0, language: 0 };
+
+  constructor({ view, cameraService, detectionService, rootFactsService }) {
+    this.#view = view;
+    this.#cameraService = cameraService;
+    this.#detectionService = detectionService;
+    this.#rootFactsService = rootFactsService;
   }
 
-  async initialize() {
-    this.view.showAppStatus("Menunggu model... 0%", false);
-
+  async init() {
+    this.#view.showIdleState();
+    this.#reportLoadProgress("vision", 0);
     try {
-      const detectionInfo = await this.detectionService.loadModel((progress) => {
-        this.view.showAppStatus(`Menunggu model... ${progress}%`, false);
-      });
-
-      this.view.showAppStatus(`Model siap (${detectionInfo.backend.toUpperCase()})`, true);
-
-      this.rootFactsService.loadModel().then((info) => {
-        this.view.showAppStatus(`AI siap (${info.backend.toUpperCase()})`, true);
-      }).catch(() => {
-        this.view.showAppStatus("Deteksi siap, AI fallback aktif", true);
-      });
+      await Promise.all([
+        this.#detectionService.loadModel((f) => this.#reportLoadProgress("vision", f)),
+        this.#rootFactsService.loadModel((f) => this.#reportLoadProgress("language", f)),
+      ]);
+      this.#view.setStatus("Siap digunakan", "active");
+      await this.#cameraService.loadCameras(this.#view.getCameraSelectElement());
     } catch (error) {
-      this.view.showError(`Model gagal dimuat: ${error.message}`);
-      this.view.showAppStatus("Model gagal", false);
+      logError("HomePresenter.init", error);
+      this.#view.setStatus("Gagal memuat model AI", "error");
     }
   }
 
-  setFPS(fps) {
-    this.fps = Number(fps) || 30;
-    this.cameraService.setFPS(this.fps);
-    this.view.updateFPSLabel(this.fps);
+  #reportLoadProgress(part, fraction) {
+    this.#loadProgress[part] = Math.min(Math.max(fraction, 0), 1);
+    const pct = Math.round((this.#loadProgress.vision + this.#loadProgress.language) / 2 * 100);
+    this.#view.setStatus("Menunggu Model... " + pct + "%", "idle");
+  }
 
-    if (this.isScanning) {
-      this.stopDetectionLoop();
-      this.startDetectionLoop();
+  // ── toggle ──────────────────────────────────────────────────────────────
+  async handleToggleScan() {
+    if (this.#isScanning) {
+      this.#stopScan();
+    } else {
+      await this.#startScan();
     }
   }
 
-  setTone(tone) {
-    this.rootFactsService.setTone(tone);
+  async #startScan() {
+    try {
+      await this.#cameraService.startCamera(
+        VIDEO_ID, CANVAS_ID, this.#view.getCameraSelectElement(),
+      );
+    } catch (error) {
+      logError("HomePresenter.startScan", error);
+      this.#view.showCameraError(error.message || "Gagal memulai kamera");
+      return;
+    }
+
+    this.#isScanning = true;
+    this.#isBusy = false;
+    this.#currentLabel = null;
+    this.#lastFact = "";
+    this.#view.setCameraActiveUI(true);
+    this.#view.showSearchingState();
+    this.#view.setStatus("Mendeteksi...", "active");
+    this.#scheduleNextTick();
   }
 
-  async toggleCamera() {
-    if (this.cameraService.isActive()) {
-      this.stopCamera();
+  /** Stop manual (user tekan tombol saat kamera hidup) → kembali ke idle. */
+  #stopScan() {
+    this.#isScanning = false;
+    this.#isBusy = false;
+    if (this.#loopTimeoutId) { clearTimeout(this.#loopTimeoutId); this.#loopTimeoutId = null; }
+    this.#cameraService.stopCamera();
+    this.#currentLabel = null;
+    this.#view.setCameraActiveUI(false);
+    this.#view.showIdleState();
+    this.#view.setStatus("Siap digunakan", "active");
+  }
+
+  /**
+   * Stop otomatis setelah deteksi berhasil.
+   * Kamera dimatikan SEGERA — hasil + fun fact tetap tampil di panel.
+   * Button kembali ke "mulai" sehingga user bisa ketuk untuk scan ulang.
+   */
+  #stopScanAfterDetection() {
+    this.#isScanning = false;
+    if (this.#loopTimeoutId) { clearTimeout(this.#loopTimeoutId); this.#loopTimeoutId = null; }
+    this.#cameraService.stopCamera();
+    this.#view.setCameraActiveUI(false);
+    this.#view.setStatus("Ketuk tombol untuk scan ulang", "active");
+    // Sengaja TIDAK memanggil showIdleState() — hasil tetap tampil.
+  }
+
+  // ── detection loop ───────────────────────────────────────────────────────
+  #scheduleNextTick() {
+    if (!this.#isScanning) return;
+    const interval = Math.max(1000 / this.#cameraService.getFPS(), APP_CONFIG.detectionRetryInterval);
+    this.#loopTimeoutId = setTimeout(() => this.#tick(), interval);
+  }
+
+  async #tick() {
+    if (!this.#isScanning || this.#isBusy) {
+      this.#scheduleNextTick();
+      return;
+    }
+
+    const video = this.#view.getVideoElement();
+    if (!video || video.readyState < 2) {
+      this.#scheduleNextTick();
       return;
     }
 
     try {
-      await this.cameraService.startCamera("media-video", "media-canvas", this.view.getCameraSelect());
-      this.cameraService.setFPS(this.fps);
-      this.view.setCameraActive(true);
-      this.startDetectionLoop();
+      const result = await this.#detectionService.predict(video);
+
+      if (isValidDetection(result)) {
+        // Deteksi valid → langsung kunci, tidak perlu tick berikutnya.
+        await this.#lockInDetection(result);
+        return; // <-- loop berhenti di sini
+      }
+
+      this.#view.showSearchingState();
     } catch (error) {
-      this.view.showError(error.message || "Gagal membuka kamera.");
-      this.view.setCameraActive(false);
+      logError("HomePresenter.tick", error);
     }
+
+    this.#scheduleNextTick();
   }
 
-  stopCamera() {
-    this.stopDetectionLoop();
-    this.cameraService.stopCamera();
-    this.view.setCameraActive(false);
-    this.view.showIdle();
-    this.lastDetectedLabel = "";
-  }
+  /**
+   * Langkah setelah deteksi valid pertama:
+   * 1. Stop kamera DULU (tidak ada window untuk rescan)
+   * 2. Tampilkan hasil
+   * 3. Generate fun fact
+   */
+  async #lockInDetection(result) {
+    this.#isBusy = true;
+    this.#currentLabel = result.label;
 
-  startDetectionLoop() {
-    this.isScanning = true;
-    const interval = Math.max(1000 / this.fps, 100);
+    // ★ Matikan kamera & loop SEBELUM async work agar tidak ada
+    //   celah bagi tick berikutnya untuk memulai ulang.
+    this.#stopScanAfterDetection();
 
-    const scan = async () => {
-      if (!this.isScanning || !this.cameraService.isActive()) return;
-
-      await this.scanFrame();
-      this.detectionTimer = window.setTimeout(scan, interval);
-    };
-
-    scan();
-  }
-
-  stopDetectionLoop() {
-    this.isScanning = false;
-    if (this.detectionTimer) {
-      window.clearTimeout(this.detectionTimer);
-      this.detectionTimer = null;
-    }
-  }
-
-  async scanFrame() {
-    const video = this.view.getVideoElement();
-    if (!video || video.readyState < 2) return;
+    this.#view.showResultState({ label: result.label, confidence: result.confidence });
+    this.#view.setFunFactLoading(true);
 
     try {
-      const result = await this.detectionService.predict(video);
-      if (!result.isValid) {
-        this.view.showLoading(`Mencari sayuran... ${result.label} (${result.confidence}%)`);
-        return;
-      }
-
-      this.view.showDetectionResult(result);
-
-      const now = Date.now();
-      const shouldGenerate = result.label !== this.lastDetectedLabel || now - this.lastGeneratedAt > 10000;
-
-      if (shouldGenerate) {
-        this.lastDetectedLabel = result.label;
-        this.lastGeneratedAt = now;
-        await this.generateFact(result.label);
-      }
+      const [factText] = await Promise.all([
+        this.#rootFactsService.generateFacts(result.label, this.#currentTone),
+        createDelay(APP_CONFIG.factsGenerationDelay),
+      ]);
+      this.#lastFact = factText || "Fakta menarik tidak tersedia saat ini.";
+      this.#view.setFunFactText(this.#lastFact);
     } catch (error) {
-      this.view.showError(error.message || "Prediksi gagal.");
+      logError("HomePresenter.lockInDetection", error);
+      this.#lastFact = "";
+      this.#view.setFunFactText("Gagal membuat fakta menarik. Coba scan ulang.");
+    } finally {
+      this.#view.setFunFactLoading(false);
+      this.#isBusy = false;
     }
   }
 
-  async generateFact(label) {
-    this.view.showFactLoading(true);
-    const tone = this.view.getSelectedTone();
-    const fact = await this.rootFactsService.generateFacts(label, tone);
-    this.view.showFact(fact);
-    this.view.showFactLoading(false);
+  // ── controls ─────────────────────────────────────────────────────────────
+  handleCameraChange() {
+    if (!this.#isScanning) return;
+    this.#cameraService
+      .startCamera(VIDEO_ID, CANVAS_ID, this.#view.getCameraSelectElement())
+      .catch((error) => {
+        logError("HomePresenter.handleCameraChange", error);
+        this.#view.showCameraError(error.message || "Gagal mengganti kamera");
+      });
   }
 
-  async copyCurrentFact() {
-    const text = this.view.getCurrentFactText();
-    if (!text) return;
+  handleFPSChange(fps) {
+    const applied = this.#cameraService.setFPS(fps);
+    this.#view.setFPSLabel(applied);
+  }
 
-    await navigator.clipboard.writeText(text);
-    this.view.showCopiedState();
+  handleToneChange(tone) {
+    this.#currentTone = this.#rootFactsService.setTone(tone);
+  }
+
+  async handleCopyFact() {
+    if (!this.#lastFact) return;
+    try {
+      await navigator.clipboard.writeText(this.#lastFact);
+      this.#view.flashCopyButton();
+    } catch (error) {
+      logError("HomePresenter.handleCopyFact", error);
+    }
   }
 }
-
-export default HomePresenter;

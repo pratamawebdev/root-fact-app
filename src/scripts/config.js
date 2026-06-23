@@ -1,10 +1,8 @@
 const APP_CONFIG = {
-  detectionConfidenceThreshold: 65,
-  analyzingDelay: 1200,
-  factsGenerationDelay: 500,
+  detectionConfidenceThreshold: 70,
+  analyzingDelay: 2000,
+  factsGenerationDelay: 2000,
   detectionRetryInterval: 100,
-  modelBasePath: "/model",
-  hfModel: "Xenova/flan-t5-small",
 };
 
 const UI_CONFIG = {
@@ -21,10 +19,29 @@ const UI_CONFIG = {
 };
 
 const CAMERA_CONFIG = {
-  defaultFPS: 30,
-  width: { ideal: 640 },
-  height: { ideal: 480 },
-  facingMode: "environment",
+  // Used when a real deviceId isn't selected yet (e.g. before permission
+  // has been granted and device labels become available).
+  defaultFacingMode: "environment",
+  frontFacingMode: "user",
+  videoConstraints: {
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+  },
+  fps: {
+    min: 15,
+    max: 60,
+    default: 30,
+    step: 15,
+  },
 };
 
-export { APP_CONFIG, UI_CONFIG, CAMERA_CONFIG };
+const MODEL_CONFIG = {
+  // Served as static assets (see webpack CopyWebpackPlugin) so they can be
+  // precached by Workbox for offline detection.
+  visionModelUrl: "/model/model.json",
+  visionMetadataUrl: "/model/metadata.json",
+  // Lightweight seq2seq model, compatible with Transformers.js + WebGPU/WASM.
+  factsModelId: "Xenova/flan-t5-small",
+};
+
+export { APP_CONFIG, UI_CONFIG, CAMERA_CONFIG, MODEL_CONFIG };

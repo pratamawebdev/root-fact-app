@@ -1,26 +1,25 @@
 import "../styles/styles.css";
 import App from "./pages/app.js";
 
-async function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) return;
-
-  try {
-    await navigator.serviceWorker.register("/sw.js");
-    console.info("Service worker registered.");
-  } catch (error) {
-    console.warn("Service worker registration failed.", error);
-  }
-}
-
 document.addEventListener("DOMContentLoaded", async () => {
   const app = new App({
     container: document.querySelector("#main-content"),
   });
 
   await app.renderPage();
-  await registerServiceWorker();
 
   if (typeof lucide !== "undefined") {
     lucide.createIcons();
   }
 });
+
+// sw.js is only generated for production builds (see webpack.prod.js /
+// WorkboxWebpackPlugin.GenerateSW), so registration is skipped in dev to
+// avoid a noisy 404 in the console.
+if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.error("❌ Service worker registration failed:", error);
+    });
+  });
+}

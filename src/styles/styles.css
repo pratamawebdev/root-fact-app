@@ -108,6 +108,10 @@ body {
   animation: pulse 2s ease-in-out infinite;
 }
 
+.status-dot.error {
+  background-color: #ef4444;
+}
+
 .main-content {
   flex: 1;
   display: flex;
@@ -541,7 +545,21 @@ input[type="range"]::-webkit-slider-thumb:hover {
   height: 100%;
   background-color: var(--primary);
   border-radius: 3px;
-  transition: width 0.4s ease;
+  transition:
+    width 0.4s ease,
+    background-color 0.3s ease;
+}
+
+.confidence-fill.theme-green {
+  background-color: #10b981;
+}
+
+.confidence-fill.theme-yellow {
+  background-color: #f59e0b;
+}
+
+.confidence-fill.theme-red {
+  background-color: #ef4444;
 }
 
 .confidence-value {
@@ -629,15 +647,4 @@ input[type="range"]::-webkit-slider-thumb:hover {
     width: 64px;
     height: 64px;
   }
-}
-
-.muted {
-  opacity: 0.55;
-}
-
-button:focus-visible,
-select:focus-visible,
-input:focus-visible {
-  outline: 3px solid rgba(16, 185, 129, 0.35);
-  outline-offset: 2px;
 }
