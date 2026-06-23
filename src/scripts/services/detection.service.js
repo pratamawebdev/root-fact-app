@@ -1,7 +1,12 @@
 import * as tf from "@tensorflow/tfjs";
 import "@tensorflow/tfjs-backend-webgpu";
+import "@tensorflow/tfjs-backend-webgl";
 import { MODEL_CONFIG } from "../config.js";
-import { isWebGPUSupported, logError, validateModelMetadata } from "../utils/index.js";
+import {
+  isWebGPUSupported,
+  logError,
+  validateModelMetadata,
+} from "../utils/index.js";
 
 /**
  * Computer Vision service: loads the Teachable Machine (MobileNet) model
@@ -30,7 +35,10 @@ class DetectionService {
         this.backend = "webgpu";
         return;
       } catch (error) {
-        logError("DetectionService - WebGPU unavailable, falling back to WebGL", error);
+        logError(
+          "DetectionService - WebGPU unavailable, falling back to WebGL",
+          error,
+        );
       }
     }
 

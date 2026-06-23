@@ -9,6 +9,27 @@ module.exports = {
   output: {
     filename: "[name].bundle.js",
     path: path.resolve(__dirname, "dist"),
+    // Generate real ES module output so import.meta.url works natively
+    // in the browser — this prevents Webpack from generating the broken
+    // __webpack_module__ polyfill that crashes at runtime.
+    module: true,
+    chunkFormat: "module",
+  },
+  experiments: {
+    // Required to enable output.module = true
+    outputModule: true,
+  },
+  externals: {
+    // @huggingface/transformers pulls in onnxruntime-node as a peer dep;
+    // that's a native binary for Node.js and has no place in a browser bundle.
+    // Marking it external tells Webpack to skip it entirely.
+    "onnxruntime-node": "{}",
+  },
+  resolve: {
+    alias: {
+      // Same reason as externals above — belt-and-suspenders.
+      "onnxruntime-node": false,
+    },
   },
   module: {
     rules: [
@@ -16,13 +37,17 @@ module.exports = {
         test: /\.(png|jpe?g|gif)$/i,
         type: "asset/resource",
       },
+
       {
         test: /\.js$/,
         exclude: /node_modules/,
         use: {
           loader: "babel-loader",
           options: {
-            presets: ["@babel/preset-env"],
+            // modules: false → Babel does not convert import/export to CJS.
+            // Webpack handles ES module syntax natively, which is required
+            // when outputting real ESM (output.module = true).
+            presets: [["@babel/preset-env", { modules: false }]],
           },
         },
       },
@@ -40,25 +65,19 @@ module.exports = {
   plugins: [
     new HtmlWebpackPlugin({
       template: path.resolve(__dirname, "src/index.html"),
+      // type="module" is correct here because our output IS real ESM now.
       scriptLoading: "module",
     }),
     new CopyWebpackPlugin({
       patterns: [
-        // Served at /model/model.json and /model/weights.bin so tfjs can
-        // fetch them at runtime, and so Workbox can precache them for
-        // offline detection (see webpack.prod.js).
         {
           from: path.resolve(__dirname, "src/model"),
           to: path.resolve(__dirname, "dist/model"),
         },
-        // favicon.ico, /icons/*, and manifest.json land at the dist root.
         {
           from: path.resolve(__dirname, "src/public"),
           to: path.resolve(__dirname, "dist"),
-          globOptions: {
-            // Empty placeholder folder, nothing to copy yet.
-            ignore: ["**/screenshots/**"],
-          },
+          globOptions: { ignore: ["**/screenshots/**"] },
           noErrorOnMissing: true,
         },
       ],
