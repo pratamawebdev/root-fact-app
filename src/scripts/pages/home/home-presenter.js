@@ -7,12 +7,15 @@ const CANVAS_ID = "media-canvas";
 /**
  * Alur scan:
  * 1. User klik tombol scan
- * 2. Kamera hidup dan mulai deteksi
- * 3. Jika hasil valid, label langsung dikunci
- * 4. Loop deteksi berhenti
- * 5. Kamera dimatikan
- * 6. Hasil + fun fact tetap tampil
+ * 2. Kamera hidup → tunggu warm-up delay agar sensor stabil
+ * 3. Deteksi loop berjalan; tiap inferensi diselingi settle delay
+ * 4. Jika hasil valid, label dikunci
+ * 5. Loop berhenti, kamera dimatikan
+ * 6. Hasil + fun fact tampil
  * 7. Scan ulang hanya jika user klik tombol lagi
+ *
+ * Reset state (label, fakta, TF.js memory) dilakukan di awal setiap scan
+ * agar percobaan kedua dan seterusnya dimulai dari kondisi bersih.
  */
 export default class HomePresenter {
   #view;
@@ -23,6 +26,10 @@ export default class HomePresenter {
   #isScanning = false;
   #isBusy = false;
   #loopTimeoutId = null;
+
+  // Flag: true selama periode warm-up setelah kamera menyala.
+  // Inferensi tidak boleh berjalan sebelum warm-up selesai.
+  #isWarmingUp = false;
 
   #currentTone = "normal";
   #currentLabel = "";
@@ -80,6 +87,13 @@ export default class HomePresenter {
   }
 
   async #startScan() {
+    // ── Reset memory dari sesi sebelumnya ────────────────────────────────
+    // Bersihkan tensor TF.js yang tersisa dan reset statistik performa
+    // agar percobaan kedua+ dimulai dari kondisi benar-benar bersih.
+    this.#detectionService.reset();
+    this.#currentLabel = "";
+    this.#lastFact = "";
+
     try {
       await this.#cameraService.startCamera(
         VIDEO_ID,
@@ -94,19 +108,29 @@ export default class HomePresenter {
 
     this.#isScanning = true;
     this.#isBusy = false;
-    this.#currentLabel = "";
-    this.#lastFact = "";
+    this.#isWarmingUp = true;
 
     this.#view.setCameraActiveUI(true);
     this.#view.showSearchingState();
-    this.#view.setStatus("Mendeteksi...", "active");
+    this.#view.setStatus("Menyiapkan kamera...", "idle");
 
+    // ── Warm-up delay ─────────────────────────────────────────────────────
+    // Beri waktu sensor kamera untuk menstabilkan eksposur & white balance.
+    // Tanpa delay ini, frame pertama sering hitam atau gelap sehingga
+    // model akan salah mengklasifikasi (terutama di scan kedua+).
+    await createDelay(APP_CONFIG.cameraWarmupDelay);
+
+    if (!this.#isScanning) return; // user bisa membatalkan selama warmup
+
+    this.#isWarmingUp = false;
+    this.#view.setStatus("Mendeteksi...", "active");
     this.#scheduleNextTick();
   }
 
   #stopScanManually() {
     this.#isScanning = false;
     this.#isBusy = false;
+    this.#isWarmingUp = false;
 
     if (this.#loopTimeoutId) {
       clearTimeout(this.#loopTimeoutId);
@@ -115,6 +139,8 @@ export default class HomePresenter {
 
     this.#cameraService.stopCamera();
 
+    // Bersihkan state dan memory saat user menghentikan scan secara manual
+    this.#detectionService.reset();
     this.#currentLabel = "";
     this.#lastFact = "";
 
@@ -125,6 +151,7 @@ export default class HomePresenter {
 
   #stopScanAfterDetection() {
     this.#isScanning = false;
+    this.#isWarmingUp = false;
 
     if (this.#loopTimeoutId) {
       clearTimeout(this.#loopTimeoutId);
@@ -138,25 +165,39 @@ export default class HomePresenter {
   }
 
   #scheduleNextTick() {
-    if (!this.#isScanning) return;
+    if (!this.#isScanning || this.#isWarmingUp) return;
 
+    // Hitung interval: gunakan nilai terbesar antara target FPS interval
+    // dan inferenceSettleDelay untuk memastikan frame benar-benar stabil
+    // sebelum inferensi berikutnya dijalankan.
+    const fpsInterval = Math.round(1000 / this.#cameraService.getFPS());
     const interval = Math.max(
-      1000 / this.#cameraService.getFPS(),
+      fpsInterval,
       APP_CONFIG.detectionRetryInterval,
+      APP_CONFIG.inferenceSettleDelay,
     );
 
     this.#loopTimeoutId = setTimeout(() => this.#tick(), interval);
   }
 
   async #tick() {
-    if (!this.#isScanning || this.#isBusy) {
+    if (!this.#isScanning || this.#isBusy || this.#isWarmingUp) {
       this.#scheduleNextTick();
       return;
     }
 
     const video = this.#view.getVideoElement();
 
-    if (!video || video.readyState < 2) {
+    // Pastikan video benar-benar siap: readyState 4 (HAVE_ENOUGH_DATA)
+    // jauh lebih aman daripada readyState 2 untuk inferensi — frame sudah
+    // stabil dan tidak berisi data parsial.
+    if (!video || video.readyState < 4) {
+      this.#scheduleNextTick();
+      return;
+    }
+
+    // Tambahan guard: skip jika video masih paused atau ukurannya belum ada
+    if (video.paused || video.videoWidth === 0 || video.videoHeight === 0) {
       this.#scheduleNextTick();
       return;
     }

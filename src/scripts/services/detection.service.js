@@ -81,6 +81,34 @@ class DetectionService {
   }
 
   /**
+   * Reset performance stats dan dispose tensor yang mungkin masih tersisa
+   * di memori GPU/WASM dari sesi prediksi sebelumnya.
+   * Dipanggil setiap kali scan dimulai ulang agar hasil selalu bersih.
+   */
+  reset() {
+    // Bersihkan semua tensor yang masih hidup di engine TF.js kecuali
+    // tensor milik model itu sendiri (weights tidak boleh di-dispose).
+    // tf.engine().startScope() / endScope() sudah dipakai di predict(),
+    // jadi yang tersisa paling banyak adalah tensor yang bocor karena
+    // exception. disposeVariables() aman: ia hanya dispose tf.Variable
+    // yang tidak dibutuhkan lagi, bukan model weights.
+    try {
+      tf.engine().startScope();
+      tf.engine().endScope();
+    } catch (_) {
+      // best-effort
+    }
+
+    // Reset statistik performa agar average inference time tidak
+    // akumulasi lintas sesi.
+    this.performanceStats = {
+      operations: 0,
+      totalTime: 0,
+      averageTime: 0,
+    };
+  }
+
+  /**
    * Runs a prediction on an image-like element (an HTMLVideoElement frame,
    * canvas, or image). Every tensor created during the cycle is disposed.
    */

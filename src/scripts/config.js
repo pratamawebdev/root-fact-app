@@ -2,6 +2,15 @@ const APP_CONFIG = {
   detectionConfidenceThreshold: 70,
   factsGenerationDelay: 2000,
   detectionRetryInterval: 100,
+
+  // Delay setelah kamera menyala sebelum inferensi pertama dimulai.
+  // Memberi waktu sensor kamera untuk menstabilkan eksposur & white balance
+  // sehingga frame pertama yang dikirim ke model tidak hitam/blur.
+  cameraWarmupDelay: 1500, // ms
+
+  // Delay minimum antar inferensi agar model tidak membaca frame yang belum
+  // stabil (terutama di percobaan kedua dan seterusnya).
+  inferenceSettleDelay: 300, // ms
 };
 
 const UI_CONFIG = {
