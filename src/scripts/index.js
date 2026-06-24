@@ -13,13 +13,31 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-// sw.js is only generated for production builds (see webpack.prod.js /
-// WorkboxWebpackPlugin.GenerateSW), so registration is skipped in dev to
-// avoid a noisy 404 in the console.
+// sw.js hanya di-generate untuk production build (lihat webpack.prod.js /
+// WorkboxWebpackPlugin.GenerateSW), sehingga registrasi dilewati di dev
+// agar tidak muncul error 404 di console.
 if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((error) => {
-      console.error("❌ Service worker registration failed:", error);
-    });
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => {
+        console.log("✅ Service Worker terdaftar:", registration.scope);
+
+        // Cek update SW saat user kembali ke tab
+        registration.addEventListener("updatefound", () => {
+          const newWorker = registration.installing;
+          newWorker?.addEventListener("statechange", () => {
+            if (
+              newWorker.state === "installed" &&
+              navigator.serviceWorker.controller
+            ) {
+              console.log("🔄 Update Service Worker tersedia.");
+            }
+          });
+        });
+      })
+      .catch((error) => {
+        console.error("❌ Registrasi Service Worker gagal:", error);
+      });
   });
 }
