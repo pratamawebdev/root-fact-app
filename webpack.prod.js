@@ -3,6 +3,7 @@ const { merge } = require("webpack-merge");
 const common = require("./webpack.common.js");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const { InjectManifest } = require("workbox-webpack-plugin");
+const packageJson = require("./package.json");
 
 module.exports = merge(common, {
   mode: "production",
@@ -32,26 +33,29 @@ module.exports = merge(common, {
       swDest: "sw.js",
 
       // Naikkan batas ukuran agar weights.bin (~2.1 MB) masuk precache
-      maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10 MB
+      maximumFileSizeToCacheInBytes: 35 * 1024 * 1024, // 35 MB, agar file WASM onnxruntime masuk precache
 
-      // File yang disalin CopyWebpackPlugin (model, ikon, manifest)
-      // tidak otomatis terdeteksi Webpack → daftarkan manual di sini.
-      // Workbox akan menyertakannya dalam self.__WB_MANIFEST.
+      // Ambil hanya tipe file yang dibutuhkan untuk offline.
+      // File .LICENSE.txt dan _redirects tidak perlu dicache.
+      include: [
+        /\.html$/,
+        /\.js$/,
+        /\.mjs$/,
+        /\.wasm$/,
+        /\.css$/,
+        /\.json$/,
+        /\.png$/,
+        /\.ico$/,
+        /\.bin$/,
+      ],
+      exclude: [/\.LICENSE\.txt$/, /^_redirects$/],
+
+      // sw.js tidak otomatis masuk manifest karena file ini dibuat oleh
+      // InjectManifest sendiri. Tambahkan manual supaya pengecekan cache
+      // tidak lagi menemukan sw.js sebagai berkas yang gagal dicache.
       additionalManifestEntries: [
-        // Halaman utama
-        { url: "/index.html", revision: "1" },
-
-        // Web App Manifest & ikon
-        { url: "/manifest.json", revision: "1" },
-        { url: "/favicon.ico", revision: "1" },
-        { url: "/icons/icon-192x192.png", revision: "1" },
-        { url: "/icons/icon-512x512.png", revision: "1" },
-        { url: "/icons/apple-touch-icon.png", revision: "1" },
-
-        // Model TensorFlow.js — wajib agar deteksi berjalan offline
-        { url: "/model/model.json", revision: "1" },
-        { url: "/model/metadata.json", revision: "1" },
-        { url: "/model/weights.bin", revision: "1" },
+        { url: "/", revision: packageJson.version },
+        { url: "/sw.js", revision: packageJson.version },
       ],
     }),
   ],

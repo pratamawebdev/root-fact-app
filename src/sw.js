@@ -10,17 +10,30 @@
  *     perlu mengunduh Workbox dari CDN.
  */
 
-import { precacheAndRoute, cleanupOutdatedCaches } from "workbox-precaching";
-import { registerRoute } from "workbox-routing";
+import { clientsClaim } from "workbox-core";
+import {
+  precacheAndRoute,
+  cleanupOutdatedCaches,
+  createHandlerBoundToURL,
+} from "workbox-precaching";
+import { registerRoute, NavigationRoute } from "workbox-routing";
 import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from "workbox-strategies";
 import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
 
+// ── Lifecycle ────────────────────────────────────────────────────────────────
+// Aktifkan service worker baru langsung setelah build terbaru terpasang.
+self.skipWaiting();
+clientsClaim();
+
 // ── Precaching ────────────────────────────────────────────────────────────────
 // self.__WB_MANIFEST diisi oleh InjectManifest saat build.
-// Berisi semua aset Webpack + additionalManifestEntries dari webpack.prod.js.
+// Berisi aset Webpack, model AI, file WASM/MJS runtime, ikon, manifest, dan sw.js.
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
+
+// Fallback navigasi agar reload halaman tetap membuka index.html saat offline.
+registerRoute(new NavigationRoute(createHandlerBoundToURL("/index.html")));
 
 // ── Runtime Caching ───────────────────────────────────────────────────────────
 
@@ -102,7 +115,25 @@ registerRoute(
   }),
 );
 
-// 7. API eksternal — Network First
+// 7. Aset AI lokal tambahan — Cache First
+//    Menangkap file model/metadata/weights, MJS, dan WASM jika ada request baru
+//    yang belum masuk precache pada build berikutnya.
+registerRoute(
+  ({ url }) =>
+    url.origin === self.location.origin &&
+    (url.pathname.startsWith("/model/") ||
+      url.pathname.endsWith(".wasm") ||
+      url.pathname.endsWith(".mjs")),
+  new CacheFirst({
+    cacheName: "ai-runtime-assets-cache",
+    plugins: [
+      new ExpirationPlugin({ maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 30 }),
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+    ],
+  }),
+);
+
+// 8. API eksternal — Network First
 //    Utamakan data terbaru; fallback ke cache jika offline.
 registerRoute(
   ({ url }) => url.pathname.startsWith("/api/"),

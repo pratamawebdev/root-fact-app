@@ -9,6 +9,7 @@ module.exports = {
   output: {
     filename: "[name].bundle.js",
     path: path.resolve(__dirname, "dist"),
+    publicPath: "/",
     // Generate real ES module output so import.meta.url works natively
     // in the browser — this prevents Webpack from generating the broken
     // __webpack_module__ polyfill that crashes at runtime.
