@@ -80,6 +80,11 @@ module.exports = {
           globOptions: { ignore: ["**/screenshots/**"] },
           noErrorOnMissing: true,
         },
+        // Salin sw.js manual ke root dist/ agar terdaftar di scope "/"
+        {
+          from: path.resolve(__dirname, "src/sw.js"),
+          to: path.resolve(__dirname, "dist/sw.js"),
+        },
       ],
     }),
   ],

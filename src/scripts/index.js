@@ -13,17 +13,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-// sw.js hanya di-generate untuk production build (lihat webpack.prod.js /
-// WorkboxWebpackPlugin.GenerateSW), sehingga registrasi dilewati di dev
-// agar tidak muncul error 404 di console.
-if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+// Service Worker diregistrasi setelah halaman selesai dimuat.
+// sw.js adalah Classic Script (menggunakan importScripts Workbox CDN),
+// sehingga tidak ada konflik dengan bundle ESM hasil Webpack.
+if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("/sw.js")
       .then((registration) => {
         console.log("✅ Service Worker terdaftar:", registration.scope);
 
-        // Cek update SW saat user kembali ke tab
         registration.addEventListener("updatefound", () => {
           const newWorker = registration.installing;
           newWorker?.addEventListener("statechange", () => {
