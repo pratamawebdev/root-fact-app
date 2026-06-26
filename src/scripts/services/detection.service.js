@@ -1,24 +1,18 @@
 import * as tf from "@tensorflow/tfjs";
 import "@tensorflow/tfjs-backend-webgpu";
-import "@tensorflow/tfjs-backend-webgl";
-import { MODEL_CONFIG } from "../config.js";
+import { TENSORFLOW_CONFIG } from "../config.js";
 import {
   isWebGPUSupported,
   logError,
   validateModelMetadata,
 } from "../utils/index.js";
 
-/**
- * Computer Vision service: loads the Teachable Machine (MobileNet) model
- * with an adaptive WebGPU -> WebGL backend, and runs predictions with
- * disciplined tensor cleanup (tf.tidy / dispose) so the browser stays light.
- */
 class DetectionService {
-  constructor() {
+  constructor(onProgress = null) {
     this.model = null;
     this.labels = [];
-    this.imageSize = 224;
-    this.backend = null;
+    this.config = TENSORFLOW_CONFIG;
+    this.onProgress = onProgress;
     this.performanceStats = {
       operations: 0,
       totalTime: 0,
@@ -26,134 +20,150 @@ class DetectionService {
     };
   }
 
-  /** Backend Adaptif: try WebGPU when available, fall back to WebGL otherwise. */
-  async #setupBackend() {
+  // TODO [Basic] Muat model dan metadata secara bersamaan, lalu simpan ke instance
+  // TODO [Advance] Implementasikan strategi Backend Adaptive
+  async loadModel() {
+    try {
+      this.#emitProgress(0, "Menunggu Model... 0%");
+
+      const backend = await this.#setAdaptiveBackend();
+      const [metadata, model] = await Promise.all([
+        fetch(this.config.metadataPath).then((response) => {
+          if (!response.ok) {
+            throw new Error(
+              `Metadata gagal dimuat (${response.status} ${response.statusText})`,
+            );
+          }
+
+          return response.json();
+        }),
+        tf.loadLayersModel(this.config.modelPath, {
+          onProgress: (fraction) => {
+            const progress = Math.max(1, Math.round(fraction * 100));
+            this.#emitProgress(
+              progress,
+              `Menunggu Model... ${progress}% (${backend.toUpperCase()})`,
+            );
+          },
+        }),
+      ]);
+
+      if (!validateModelMetadata(metadata)) {
+        throw new Error("Metadata model tidak valid.");
+      }
+
+      this.model = model;
+      this.labels = metadata.labels;
+      this.#emitProgress(100, `Model siap`);
+
+      return {
+        success: true,
+        labels: this.labels,
+        backend,
+        modelName: metadata.modelName || "Unknown model",
+      };
+    } catch (error) {
+      logError("Gagal memuat model deteksi", error);
+      throw new Error(`Gagal memuat model: ${error.message}`);
+    }
+  }
+
+  // TODO [Basic] Lakukan prediksi pada elemen gambar yang diberikan dan kembalikan hasilnya
+  async predict(imageElement) {
+    if (!this.model) {
+      throw new Error("Model belum dimuat.");
+    }
+
+    if (!imageElement) {
+      throw new Error("Elemen gambar tidak tersedia untuk prediksi.");
+    }
+
+    const startTime = performance.now();
+
+    try {
+      const predictionResult = tf.tidy(() => {
+        const inputTensor = tf.browser
+          .fromPixels(imageElement)
+          .resizeBilinear(this.config.inputSize)
+          .toFloat()
+          .div(this.config.normalizationFactor)
+          .expandDims(0);
+
+        const rawPrediction = this.model.predict(inputTensor);
+        const predictionTensor = Array.isArray(rawPrediction)
+          ? rawPrediction[0]
+          : rawPrediction;
+        const values = Array.from(predictionTensor.dataSync());
+        const maxScore = Math.max(...values);
+        const maxIndex = values.indexOf(maxScore);
+
+        return {
+          values,
+          maxIndex,
+          maxScore,
+        };
+      });
+
+      const elapsed = performance.now() - startTime;
+
+      this.performanceStats.operations += 1;
+      this.performanceStats.totalTime += elapsed;
+      this.performanceStats.averageTime =
+        this.performanceStats.totalTime / this.performanceStats.operations;
+
+      const confidence = Math.round(predictionResult.maxScore * 100);
+      const className = this.labels[predictionResult.maxIndex] || "Unknown";
+      const isValid = confidence >= this.config.confidenceThreshold;
+
+      return {
+        className,
+        confidence,
+        score: predictionResult.maxScore,
+        isValid,
+        allPredictions: this.labels
+          .map((label, index) => ({
+            className: label,
+            confidence: Math.round(predictionResult.values[index] * 100),
+          }))
+          .sort((a, b) => b.confidence - a.confidence),
+        performance: {
+          operationTime: Math.round(elapsed),
+          averageTime: Math.round(this.performanceStats.averageTime),
+          totalOperations: this.performanceStats.operations,
+          backend: tf.getBackend(),
+        },
+      };
+    } catch (error) {
+      logError("Prediksi deteksi gagal", error);
+      throw new Error(`Prediksi gagal: ${error.message}`);
+    }
+  }
+
+  isLoaded() {
+    return Boolean(this.model);
+  }
+
+  #emitProgress(progress, message) {
+    if (typeof this.onProgress === "function") {
+      this.onProgress({ progress, message });
+    }
+  }
+
+  async #setAdaptiveBackend() {
     if (isWebGPUSupported()) {
       try {
         await tf.setBackend("webgpu");
         await tf.ready();
-        this.backend = "webgpu";
-        return;
+        return tf.getBackend();
       } catch (error) {
-        logError(
-          "DetectionService - WebGPU unavailable, falling back to WebGL",
-          error,
-        );
+        logError("Backend WebGPU gagal, fallback ke WebGL", error);
       }
     }
 
     await tf.setBackend("webgl");
     await tf.ready();
-    this.backend = "webgl";
-  }
 
-  /**
-   * Loads the model + metadata concurrently.
-   * @param {(fraction: number) => void} [onProgress] fraction between 0–1.
-   */
-  async loadModel(onProgress) {
-    await this.#setupBackend();
-
-    const [model, metadata] = await Promise.all([
-      tf.loadLayersModel(MODEL_CONFIG.visionModelUrl, {
-        onProgress: (fraction) => onProgress?.(fraction),
-      }),
-      fetch(MODEL_CONFIG.visionMetadataUrl).then((response) => response.json()),
-    ]);
-
-    if (!validateModelMetadata(metadata)) {
-      throw new Error("Metadata model sayuran tidak valid.");
-    }
-
-    this.model = model;
-    this.labels = metadata.labels;
-    this.imageSize = metadata.imageSize ?? 224;
-
-    // Warm up so the very first real prediction isn't penalized by lazy
-    // kernel/shader compilation. Wrapped in tf.tidy so the warm-up tensors
-    // are disposed immediately instead of lingering in memory.
-    tf.tidy(() => {
-      const warmupInput = tf.zeros([1, this.imageSize, this.imageSize, 3]);
-      this.model.predict(warmupInput);
-    });
-
-    return { labels: this.labels, backend: this.backend };
-  }
-
-  /**
-   * Reset performance stats dan dispose tensor yang mungkin masih tersisa
-   * di memori GPU/WASM dari sesi prediksi sebelumnya.
-   * Dipanggil setiap kali scan dimulai ulang agar hasil selalu bersih.
-   */
-  reset() {
-    // Bersihkan semua tensor yang masih hidup di engine TF.js kecuali
-    // tensor milik model itu sendiri (weights tidak boleh di-dispose).
-    // tf.engine().startScope() / endScope() sudah dipakai di predict(),
-    // jadi yang tersisa paling banyak adalah tensor yang bocor karena
-    // exception. disposeVariables() aman: ia hanya dispose tf.Variable
-    // yang tidak dibutuhkan lagi, bukan model weights.
-    try {
-      tf.engine().startScope();
-      tf.engine().endScope();
-    } catch (_) {
-      // best-effort
-    }
-
-    // Reset statistik performa agar average inference time tidak
-    // akumulasi lintas sesi.
-    this.performanceStats = {
-      operations: 0,
-      totalTime: 0,
-      averageTime: 0,
-    };
-  }
-
-  /**
-   * Runs a prediction on an image-like element (an HTMLVideoElement frame,
-   * canvas, or image). Every tensor created during the cycle is disposed.
-   */
-  async predict(imageElement) {
-    if (!this.model) {
-      throw new Error("Model deteksi belum dimuat.");
-    }
-
-    const startTime = performance.now();
-
-    const logits = tf.tidy(() => {
-      const normalized = tf.browser
-        .fromPixels(imageElement)
-        .resizeBilinear([this.imageSize, this.imageSize])
-        .toFloat()
-        .div(255)
-        .expandDims(0);
-
-      return this.model.predict(normalized);
-    });
-
-    let predictions;
-    try {
-      predictions = await logits.data();
-    } finally {
-      logits.dispose();
-    }
-
-    const elapsed = performance.now() - startTime;
-    this.performanceStats.operations += 1;
-    this.performanceStats.totalTime += elapsed;
-    this.performanceStats.averageTime =
-      this.performanceStats.totalTime / this.performanceStats.operations;
-
-    let bestIndex = 0;
-    for (let i = 1; i < predictions.length; i += 1) {
-      if (predictions[i] > predictions[bestIndex]) bestIndex = i;
-    }
-
-    return {
-      isValid: true,
-      label: this.labels[bestIndex] ?? "Tidak diketahui",
-      confidence: Math.round(predictions[bestIndex] * 100),
-      inferenceTimeMs: Math.round(elapsed),
-    };
+    return tf.getBackend();
   }
 }
 

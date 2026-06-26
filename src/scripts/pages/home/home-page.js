@@ -1,26 +1,19 @@
-import { generateCameraSection, generateInfoPanel, generateFooter } from "../../templates.js";
-import HomePresenter from "./home-presenter.js";
-import CameraService from "../../services/camera.service.js";
-import DetectionService from "../../services/detection.service.js";
-import RootFactsService from "../../services/rootfacts.service.js";
-import { UI_CONFIG } from "../../config.js";
 import {
-  hideElement,
-  showElement,
-  setElementText,
-  setElementHTML,
-  setElementOpacity,
+  generateCameraSection,
+  generateInfoPanel,
+  generateFooter,
+} from "../../templates.js";
+import {
   addFadeInAnimation,
-  getConfidenceCardClass,
+  hideElement,
+  setElementStyle,
+  setElementText,
+  showElement,
 } from "../../utils/index.js";
+import HomePresenter from "./home-presenter.js";
 
-/**
- * View (MVP): renders markup, exposes a small DOM-update API for the
- * presenter to call, and forwards user interaction straight to it.
- */
 export default class HomePage {
   #presenter = null;
-  #elements = {};
 
   async render() {
     return `
@@ -33,176 +26,280 @@ export default class HomePage {
   }
 
   async afterRender() {
-    this.#queryElements();
+    this.#presenter = new HomePresenter({ view: this });
     this.#bindEvents();
-
-    this.#presenter = new HomePresenter({
-      view: this,
-      cameraService: new CameraService(),
-      detectionService: new DetectionService(),
-      rootFactsService: new RootFactsService(),
-    });
-
-    await this.#presenter.init();
-  }
-
-  #queryElements() {
-    this.#elements = {
-      video: document.getElementById("media-video"),
-      canvas: document.getElementById("media-canvas"),
-      cameraOverlay: document.getElementById("camera-overlay"),
-      cameraPlaceholder: document.getElementById("camera-placeholder"),
-      btnToggle: document.getElementById("btn-toggle"),
-      cameraSelect: document.getElementById("camera-select"),
-      fpsSlider: document.getElementById("fps-slider"),
-      fpsLabel: document.getElementById("fps-label"),
-      toneSelect: document.getElementById("tone-select"),
-
-      statusDot: document.getElementById("status-dot"),
-      statusText: document.getElementById("status-text"),
-
-      stateIdle: document.getElementById("state-idle"),
-      stateLoading: document.getElementById("state-loading"),
-      stateResult: document.getElementById("state-result"),
-
-      detectedName: document.getElementById("detected-name"),
-      detectedConfidence: document.getElementById("detected-confidence"),
-      confidenceFill: document.getElementById("confidence-fill"),
-
-      funFactLoading: document.getElementById("fun-fact-loading"),
-      funFactContent: document.getElementById("fun-fact-content"),
-      funFactText: document.getElementById("fun-fact-text"),
-      btnCopy: document.getElementById("btn-copy"),
-    };
+    await this.#presenter.initialApp();
   }
 
   #bindEvents() {
-    const { btnToggle, cameraSelect, fpsSlider, toneSelect, btnCopy } = this.#elements;
+    const toggleButton = document.getElementById("btn-toggle");
+    const fpsSlider = document.getElementById("fps-slider");
+    const cameraSelect = document.getElementById("camera-select");
+    const toneSelect = document.getElementById("tone-select");
+    const copyButton = document.getElementById("btn-copy");
 
-    btnToggle?.addEventListener("click", () => this.#presenter?.handleToggleScan());
+    if (toggleButton) {
+      toggleButton.addEventListener("click", () => {
+        this.#presenter.toggleCamera();
+      });
+    }
 
-    cameraSelect?.addEventListener("change", () => this.#presenter?.handleCameraChange());
+    if (fpsSlider) {
+      fpsSlider.addEventListener("input", (event) => {
+        const fps = Number(event.target.value);
+        this.updateFPSLabel(fps);
+        this.#presenter.setFPS(fps);
+      });
+    }
 
-    fpsSlider?.addEventListener("input", (event) =>
-      this.#presenter?.handleFPSChange(Number(event.target.value)),
-    );
+    if (cameraSelect) {
+      cameraSelect.addEventListener("change", async () => {
+        await this.#presenter.changeCamera();
+      });
+    }
 
-    toneSelect?.addEventListener("change", (event) =>
-      this.#presenter?.handleToneChange(event.target.value),
-    );
+    if (toneSelect) {
+      toneSelect.addEventListener("change", async (event) => {
+        await this.#presenter.setTone(event.target.value);
+      });
+    }
 
-    btnCopy?.addEventListener("click", () => this.#presenter?.handleCopyFact());
+    if (copyButton) {
+      copyButton.addEventListener("click", async () => {
+        await this.#presenter.copyFact();
+      });
+    }
+
+    window.addEventListener("beforeunload", () => {
+      this.#presenter.stopCamera();
+    });
   }
 
-  // ---------------------------------------------------------------------
-  // View API consumed by HomePresenter. Keeping every DOM read/write here
-  // means the presenter (and the services it drives) stay framework- and
-  // markup-agnostic.
-  // ---------------------------------------------------------------------
-
-  getVideoElement() {
-    return this.#elements.video;
+  showInitialLoading() {
+    this.showCameraLoading();
+    this.showLoadingState("Menunggu Model... 0%", "Memuat Model Deteksi...");
+    this.showStatus("Menunggu Model... 0%");
   }
 
-  getCameraSelectElement() {
-    return this.#elements.cameraSelect;
-  }
+  showModelLoading(progress, message) {
+    this.showLoadingState(message, "Memuat Model Deteksi...");
+    this.showStatus(message);
 
-  setStatus(text, variant = "idle") {
-    const { statusDot, statusText } = this.#elements;
-    setElementText(statusText, text);
-    if (statusDot) {
-      statusDot.classList.remove("active", "error");
-      if (variant === "active") statusDot.classList.add("active");
-      if (variant === "error") statusDot.classList.add("error");
+    const loadingDescription = document.getElementById("loading-description");
+    if (loadingDescription && typeof progress === "number") {
+      loadingDescription.textContent = `${message}`;
     }
   }
 
-  setCameraActiveUI(isActive) {
-    const { cameraOverlay, cameraPlaceholder, btnToggle } = this.#elements;
-    if (isActive) {
-      cameraOverlay?.classList.add("active");
-      hideElement(cameraPlaceholder);
-      btnToggle?.classList.add("scanning");
-    } else {
-      cameraOverlay?.classList.remove("active");
-      showElement(cameraPlaceholder);
-      btnToggle?.classList.remove("scanning");
+  showModelReady(detectionBackend, factsBackend) {
+    this.hideCameraLoading();
+    detectionBackend = detectionBackend.toUpperCase();
+    factsBackend = factsBackend.toUpperCase();
+    this.showStatus(
+      `Model siap. Using ${detectionBackend} and ${factsBackend}.`,
+    );
+  }
+
+  showCameraLoading() {
+    const toggleButton = document.getElementById("btn-toggle");
+
+    if (toggleButton) {
+      toggleButton.disabled = true;
     }
   }
 
-  setFPSLabel(fps) {
-    setElementText(this.#elements.fpsLabel, `${fps} FPS`);
+  hideCameraLoading() {
+    const toggleButton = document.getElementById("btn-toggle");
+
+    if (toggleButton) {
+      toggleButton.disabled = false;
+    }
+  }
+
+  enableToggleButton() {
+    this.hideCameraLoading();
+  }
+
+  showCameraActive() {
+    const toggleButton = document.getElementById("btn-toggle");
+    const cameraOverlay = document.getElementById("camera-overlay");
+    const cameraPlaceholder = document.getElementById("camera-placeholder");
+    const statusDot = document.getElementById("status-dot");
+
+    toggleButton?.classList.add("scanning");
+    cameraOverlay?.classList.add("active");
+    hideElement(cameraPlaceholder);
+    statusDot?.classList.add("active");
+  }
+
+  showCameraInactive() {
+    const toggleButton = document.getElementById("btn-toggle");
+    const cameraOverlay = document.getElementById("camera-overlay");
+    const cameraPlaceholder = document.getElementById("camera-placeholder");
+    const statusDot = document.getElementById("status-dot");
+
+    toggleButton?.classList.remove("scanning");
+    cameraOverlay?.classList.remove("active");
+    showElement(cameraPlaceholder);
+    statusDot?.classList.remove("active");
   }
 
   showIdleState() {
-    showElement(this.#elements.stateIdle);
-    hideElement(this.#elements.stateLoading);
-    hideElement(this.#elements.stateResult);
+    const idleState = document.getElementById("state-idle");
+    const loadingState = document.getElementById("state-loading");
+    const resultState = document.getElementById("state-result");
+
+    showElement(idleState);
+    hideElement(loadingState);
+    hideElement(resultState);
   }
 
-  showSearchingState() {
-    hideElement(this.#elements.stateIdle);
-    showElement(this.#elements.stateLoading);
-    hideElement(this.#elements.stateResult);
+  showLoadingState(description, title = "Mencari...") {
+    const idleState = document.getElementById("state-idle");
+    const loadingState = document.getElementById("state-loading");
+    const resultState = document.getElementById("state-result");
+    const loadingTitle = document.getElementById("loading-title");
+    const loadingDescription = document.getElementById("loading-description");
+
+    hideElement(idleState);
+    showElement(loadingState);
+    hideElement(resultState);
+
+    setElementText(loadingTitle, title);
+    setElementText(loadingDescription, description);
   }
 
-  showResultState({ label, confidence }) {
-    const { stateIdle, stateLoading, stateResult } = this.#elements;
-
-    hideElement(stateIdle);
-    hideElement(stateLoading);
-    showElement(stateResult);
-
-    setElementText(this.#elements.detectedName, label);
-    this.updateConfidence(confidence);
-    addFadeInAnimation(stateResult);
+  showScanningHint(prediction) {
+    this.showLoadingState(
+      `Kandidat teratas: ${prediction.className} (${prediction.confidence}%).`,
+      "Mencari Sayuran...",
+    );
   }
 
-  updateConfidence(confidence) {
-    const { detectedConfidence, confidenceFill } = this.#elements;
-    setElementText(detectedConfidence, `${confidence}%`);
+  showResultState(result) {
+    const idleState = document.getElementById("state-idle");
+    const loadingState = document.getElementById("state-loading");
+    const resultState = document.getElementById("state-result");
+    const detectedName = document.getElementById("detected-name");
+    const detectedConfidence = document.getElementById("detected-confidence");
+    const confidenceFill = document.getElementById("confidence-fill");
+    const funFactText = document.getElementById("fun-fact-text");
+    const funFactLoading = document.getElementById("fun-fact-loading");
+    const funFactContent = document.getElementById("fun-fact-content");
+    const copyButton = document.getElementById("btn-copy");
 
-    if (confidenceFill) {
-      confidenceFill.style.width = `${confidence}%`;
-      confidenceFill.classList.remove("theme-green", "theme-yellow", "theme-red");
-      confidenceFill.classList.add(getConfidenceCardClass(confidence));
-    }
+    hideElement(idleState);
+    hideElement(loadingState);
+    showElement(resultState);
+    addFadeInAnimation(resultState);
+
+    setElementText(detectedName, result.className);
+    setElementText(detectedConfidence, `${result.confidence}%`);
+    setElementStyle(confidenceFill, "width", `${result.confidence}%`);
+    setElementText(funFactText, "");
+    copyButton?.classList.remove("copied");
+    copyButton?.setAttribute("title", "Salin fakta");
+    copyButton?.removeAttribute("disabled");
+
+    hideElement(funFactLoading);
+    showElement(funFactContent);
   }
 
-  setFunFactLoading(isLoading) {
-    const { funFactLoading, funFactContent } = this.#elements;
-    if (isLoading) {
-      showElement(funFactLoading);
-      setElementOpacity(funFactContent, UI_CONFIG.factsCardOpacity.loading);
-    } else {
-      hideElement(funFactLoading);
-      setElementOpacity(funFactContent, UI_CONFIG.factsCardOpacity.normal);
-    }
+  showFactLoading(tone) {
+    const funFactText = document.getElementById("fun-fact-text");
+    const funFactLoading = document.getElementById("fun-fact-loading");
+    const funFactContent = document.getElementById("fun-fact-content");
+    const copyButton = document.getElementById("btn-copy");
+
+    setElementText(
+      funFactText,
+      `Menyiapkan fakta dengan gaya ${this.getToneLabel(tone)}...`,
+    );
+    showElement(funFactLoading);
+    showElement(funFactContent);
+    copyButton?.setAttribute("disabled", "disabled");
+    copyButton?.classList.remove("copied");
   }
 
-  setFunFactText(text) {
-    setElementText(this.#elements.funFactText, text);
-    addFadeInAnimation(this.#elements.funFactText);
+  showFactSuccess(fact) {
+    const funFactText = document.getElementById("fun-fact-text");
+    const funFactLoading = document.getElementById("fun-fact-loading");
+    const copyButton = document.getElementById("btn-copy");
+
+    hideElement(funFactLoading);
+    setElementText(funFactText, fact);
+    copyButton?.removeAttribute("disabled");
   }
 
-  flashCopyButton() {
-    const { btnCopy } = this.#elements;
-    if (!btnCopy) return;
+  showFactError(message) {
+    const funFactText = document.getElementById("fun-fact-text");
+    const funFactLoading = document.getElementById("fun-fact-loading");
+    const copyButton = document.getElementById("btn-copy");
 
-    const original = btnCopy.innerHTML;
-    setElementHTML(btnCopy, '<i data-lucide="check" width="18" height="18"></i>');
-    if (typeof lucide !== "undefined") lucide.createIcons();
-
-    setTimeout(() => {
-      setElementHTML(btnCopy, original);
-      if (typeof lucide !== "undefined") lucide.createIcons();
-    }, UI_CONFIG.animationDuration * 2);
+    hideElement(funFactLoading);
+    setElementText(
+      funFactText,
+      message || "Fakta tidak dapat dibuat untuk saat ini.",
+    );
+    copyButton?.setAttribute("disabled", "disabled");
   }
 
-  showCameraError(message) {
-    this.setStatus(message, "error");
-    this.setCameraActiveUI(false);
-    this.showIdleState();
+  showCopySuccess() {
+    const copyButton = document.getElementById("btn-copy");
+
+    copyButton?.classList.add("copied");
+    copyButton?.setAttribute("title", "Tersalin");
+
+    window.setTimeout(() => {
+      copyButton?.classList.remove("copied");
+      copyButton?.setAttribute("title", "Salin fakta");
+    }, 1200);
+  }
+
+  showStatus(message) {
+    const statusText = document.getElementById("status-text");
+    setElementText(statusText, message);
+  }
+
+  showError(message) {
+    this.showCameraInactive();
+    this.hideCameraLoading();
+    this.showStatus(message);
+    alert(message);
+  }
+
+  updateFPSLabel(fps) {
+    const fpsLabel = document.getElementById("fps-label");
+    setElementText(fpsLabel, `${fps} FPS`);
+  }
+
+  getCameraSelectElement() {
+    return document.getElementById("camera-select");
+  }
+
+  getFPSValue() {
+    const fpsSlider = document.getElementById("fps-slider");
+    return Number(fpsSlider?.value || 30);
+  }
+
+  getSelectedTone() {
+    const toneSelect = document.getElementById("tone-select");
+    return toneSelect?.value || "normal";
+  }
+
+  getToneLabel(tone) {
+    const toneLabels = {
+      normal: "normal",
+      funny: "lucu",
+      professional: "profesional",
+      casual: "santai",
+    };
+
+    return toneLabels[tone] || toneLabels.normal;
+  }
+
+  getCurrentFact() {
+    const funFactText = document.getElementById("fun-fact-text");
+    return funFactText?.textContent?.trim() || "";
   }
 }

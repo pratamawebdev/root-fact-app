@@ -1,4 +1,8 @@
-import { APP_CONFIG, UI_CONFIG } from "../config.js";
+import {
+  APP_CONFIG,
+  UI_CONFIG,
+  CAMERA_CONFIG,
+} from "../config.js";
 
 export const isMobileDevice = () => {
   return (
@@ -9,6 +13,40 @@ export const isMobileDevice = () => {
 
 export const createDelay = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+export const getCameraConfig = () => {
+  const mobile = isMobileDevice();
+
+  return {
+    defaultFPS: CAMERA_CONFIG.defaultFPS,
+    fpsRange: CAMERA_CONFIG.fpsRange,
+    resolution: mobile
+      ? CAMERA_CONFIG.mobileResolution
+      : CAMERA_CONFIG.desktopResolution,
+    facingMode: mobile
+      ? CAMERA_CONFIG.mobileFacingMode
+      : CAMERA_CONFIG.desktopFacingMode,
+  };
+};
+
+export const getCameraConstraints = (
+  selectedCameraId,
+  config = getCameraConfig(),
+) => {
+  return {
+    audio: false,
+    video: {
+      deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+      width: { ideal: config.resolution.width },
+      height: { ideal: config.resolution.height },
+      facingMode: selectedCameraId ? undefined : { ideal: config.facingMode },
+      frameRate: {
+        ideal: config.defaultFPS,
+        max: config.fpsRange.max,
+      },
+    },
+  };
+};
 
 export const sleep = (time = 1000) => {
   return new Promise((resolve) => setTimeout(resolve, time));
@@ -88,6 +126,18 @@ export const addScaleAnimation = (element, callback) => {
       callback();
     }
   }, animationDuration);
+};
+
+export const setElementDisplay = (element, displayValue) => {
+  if (element) {
+    element.style.display = displayValue;
+  }
+};
+
+export const setElementStyle = (element, property, value) => {
+  if (element) {
+    element.style[property] = value;
+  }
 };
 
 export const hideElement = (element) => {

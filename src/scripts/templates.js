@@ -78,8 +78,8 @@ function generateLoadingState() {
           <i data-lucide="search" width="24" height="24"></i>
         </div>
       </div>
-      <h2>Mencari...</h2>
-      <p>Sedang mengidentifikasi sayuran Anda</p>
+      <h2 id="loading-title">Mencari...</h2>
+      <p id="loading-description">Sedang mengidentifikasi sayuran Anda</p>
     </div>
   `;
 }

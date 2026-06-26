@@ -1,6 +1,31 @@
 import "../styles/styles.css";
 import App from "./pages/app.js";
 
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/sw.js", {
+      method: "HEAD",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    await navigator.serviceWorker.register("/sw.js");
+  } catch (error) {
+    console.error("Service worker registration skipped:", error);
+  }
+}
+
+window.addEventListener("load", () => {
+  registerServiceWorker();
+});
+
 document.addEventListener("DOMContentLoaded", async () => {
   const app = new App({
     container: document.querySelector("#main-content"),
@@ -12,31 +37,3 @@ document.addEventListener("DOMContentLoaded", async () => {
     lucide.createIcons();
   }
 });
-
-// Service Worker diregistrasi setelah halaman selesai dimuat.
-// sw.js adalah Classic Script (menggunakan importScripts Workbox CDN),
-// sehingga tidak ada konflik dengan bundle ESM hasil Webpack.
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker
-      .register("/sw.js")
-      .then((registration) => {
-        console.log("✅ Service Worker terdaftar:", registration.scope);
-
-        registration.addEventListener("updatefound", () => {
-          const newWorker = registration.installing;
-          newWorker?.addEventListener("statechange", () => {
-            if (
-              newWorker.state === "installed" &&
-              navigator.serviceWorker.controller
-            ) {
-              console.log("🔄 Update Service Worker tersedia.");
-            }
-          });
-        });
-      })
-      .catch((error) => {
-        console.error("❌ Registrasi Service Worker gagal:", error);
-      });
-  });
-}

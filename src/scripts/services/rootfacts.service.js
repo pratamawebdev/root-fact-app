@@ -1,120 +1,135 @@
 import { pipeline } from "@huggingface/transformers";
-import { MODEL_CONFIG } from "../config.js";
-import { isWebGPUSupported, logError } from "../utils/index.js";
+import { APP_CONFIG, TRANSFORMERS_CONFIG } from "../config.js";
+import { createDelay, isWebGPUSupported, logError } from "../utils/index.js";
 
-const MAX_VEGETABLE_LENGTH = 50;
-
-// Persona Dinamis: each tone reframes the generation prompt's style.
-const TONE_PERSONAS = {
-  normal: "a friendly, informative guide",
-  funny: "a witty comedian who loves silly jokes",
-  professional: "a formal food scientist",
-  casual: "a relaxed friend chatting casually",
-};
-
-/**
- * Generative AI service: loads a local Transformers.js text2text-generation
- * pipeline and turns a detected vegetable label into a short fun fact.
- */
 class RootFactsService {
-  constructor() {
+  constructor(onProgress = null) {
     this.generator = null;
     this.isModelLoaded = false;
     this.isGenerating = false;
-    this.backend = null;
+    this.config = TRANSFORMERS_CONFIG;
+    this.currentBackend = null;
     this.currentTone = "normal";
+    this.onProgress = onProgress;
   }
 
-  /** Backend Adaptif: prefer WebGPU, fall back to WASM if init/inference fails. */
-  async loadModel(onProgress) {
-    const progressCallback = (event) => {
-      if (event?.status === "progress" && event.total) {
-        onProgress?.(event.loaded / event.total);
-      }
-    };
-
-    const tryLoad = async (device) =>
-      pipeline("text2text-generation", MODEL_CONFIG.factsModelId, {
-        dtype: "q4",
-        device,
-        progress_callback: progressCallback,
-      });
-
-    const preferredDevice = isWebGPUSupported() ? "webgpu" : "wasm";
-
+  // TODO [Basic] Muat model dan inisialisasi pipeline text2text-generation
+  // TODO [Advance] Implementasikan strategi Backend Adaptive
+  async loadModel() {
     try {
-      this.generator = await tryLoad(preferredDevice);
-      this.backend = preferredDevice;
+      const device = isWebGPUSupported()
+        ? "webgpu"
+        : this.config.fallbackDevice;
+
+      this.#emitProgress(`Memuat model AI (${device.toUpperCase()})...`);
+
+      this.generator = await pipeline(
+        "text2text-generation",
+        this.config.modelName,
+        {
+          dtype: this.config.dtype,
+          device,
+        },
+      );
+
+      await createDelay(APP_CONFIG.factsGenerationDelay);
+
+      this.isModelLoaded = true;
+      this.currentBackend = device;
+      this.#emitProgress(`Model siap`);
+
+      return {
+        success: true,
+        model: this.config.modelName,
+        backend: this.currentBackend,
+      };
     } catch (error) {
-      logError(`RootFactsService - device "${preferredDevice}" failed, falling back to wasm`, error);
-      this.generator = await tryLoad("wasm");
-      this.backend = "wasm";
+      this.isModelLoaded = false;
+      logError("Gagal memuat model RootFacts", error);
+      throw new Error(`Gagal memuat model: ${error.message}`);
     }
-
-    this.isModelLoaded = true;
-    return { backend: this.backend };
   }
 
+  // TODO [Advance] Konfigurasi tone fakta yang dihasilkan
   setTone(tone) {
-    this.currentTone = TONE_PERSONAS[tone] ? tone : "normal";
-    return this.currentTone;
+    const nextTone = this.config.tones[tone] ? tone : "normal";
+    this.currentTone = nextTone;
   }
 
-  /** Strips anything that isn't a letter/space and caps the length, to keep
-   * the label out of prompt-injection territory before it reaches the model. */
-  #sanitizeInput(vegetable) {
-    if (typeof vegetable !== "string") return "";
-    return vegetable
-      .normalize("NFKC")
-      .replace(/[^a-zA-Z\s]/g, "")
-      .trim()
-      .slice(0, MAX_VEGETABLE_LENGTH);
-  }
-
-  #buildPrompt(vegetable, tone) {
-    const persona = TONE_PERSONAS[tone] ?? TONE_PERSONAS.normal;
-    return (
-      `You are ${persona}. Share ONE short, unique, and surprising fun fact ` +
-      `about the vegetable "${vegetable}". Respond in 1-2 sentences only.`
-    );
-  }
-
-  async generateFacts(vegetable, tone = this.currentTone) {
+  // TODO [Basic] Lakukan prediksi pada elemen gambar yang diberikan dan kembalikan hasilnya
+  // TODO [Basic] Tambahkan validasi untuk maksimum panjang input dan pembersihan input terhadap karakter khusus untuk mengatasi prompt injection
+  // TODO [Skilled] Konfigurasikan parameter generasi berdasarkan kebutuhan
+  // TODO [Advance] Implemenasikan parameter tone untuk mengatur nada fakta yang dihasilkan
+  async generateFacts(vegetable, tone = "normal") {
     if (!this.isReady()) {
-      throw new Error("Model fun fact belum siap.");
-    }
-    if (this.isGenerating) {
-      throw new Error("Sedang membuat fakta menarik lain, mohon tunggu.");
+      throw new Error("Model belum siap.");
     }
 
-    const cleanVegetable = this.#sanitizeInput(vegetable);
-    if (!cleanVegetable) {
-      throw new Error("Nama sayuran tidak valid.");
+    const safeVegetable = this.#sanitizeVegetableInput(vegetable);
+    if (!safeVegetable) {
+      throw new Error("Label sayuran tidak valid untuk diproses.");
     }
 
-    this.isGenerating = true;
+    this.setTone(tone);
 
     try {
-      const prompt = this.#buildPrompt(cleanVegetable, tone);
+      this.isGenerating = true;
+      await createDelay(400);
 
-      // max_new_tokens kept at the documented ceiling (150) so local
-      // generation stays responsive and doesn't freeze the browser tab.
-      const output = await this.generator(prompt, {
-        max_new_tokens: 150,
-        temperature: 0.8,
-        top_p: 0.9,
-        do_sample: true,
+      const toneInstruction =
+        this.config.tones[this.currentTone] || this.config.tones.normal;
+      const prompt = [
+        `Write one fun fact about ${safeVegetable}.`,
+        toneInstruction,
+        "Use English.",
+        "Keep it within 2 sentences and make it relevant to the vegetable.",
+        "Do not mention that you are an AI.",
+      ].join(" ");
+
+      const result = await this.generator(prompt, {
+        max_new_tokens: this.config.maxNewTokens,
+        temperature: this.config.temperature,
+        top_p: this.config.topP,
+        do_sample: this.config.doSample,
       });
 
-      const result = Array.isArray(output) ? output[0] : output;
-      return (result?.generated_text ?? "").trim();
+      return {
+        vegetable: safeVegetable,
+        tone: this.currentTone,
+        fact: result[0]?.generated_text?.trim() || "",
+        backend: this.currentBackend,
+      };
+    } catch (error) {
+      logError("Gagal menghasilkan fakta", error);
+      throw new Error(`Gagal menghasilkan fakta: ${error.message}`);
     } finally {
       this.isGenerating = false;
     }
   }
 
+  // TODO [Basic] Periksa apakah model sudah dimuat dan siap digunakan
   isReady() {
-    return Boolean(this.isModelLoaded && this.generator);
+    return this.isModelLoaded && !this.isGenerating && Boolean(this.generator);
+  }
+
+  #sanitizeVegetableInput(input) {
+    if (typeof input !== "string") {
+      return "";
+    }
+
+    const sanitized = input
+      .replace(/[^a-zA-Z\s-]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, this.config.maxInputLength);
+
+    return sanitized;
+  }
+
+  #emitProgress(message) {
+    if (typeof this.onProgress === "function") {
+      this.onProgress({ message });
+    }
   }
 }
 

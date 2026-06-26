@@ -1,165 +1,142 @@
-import { CAMERA_CONFIG } from "../config.js";
-import { getCameraErrorMessage, logError } from "../utils/index.js";
+import {
+  getCameraConfig,
+  getCameraConstraints,
+  getCameraErrorMessage,
+  logError,
+} from "../utils/index.js";
 
-/**
- * Wraps the MediaStream (getUserMedia) API: device enumeration, starting /
- * stopping the camera stream, and a configurable FPS limit used to throttle
- * how often the detection loop is allowed to run.
- */
 class CameraService {
   constructor() {
     this.stream = null;
     this.video = null;
     this.canvas = null;
-    this.config = CAMERA_CONFIG;
-    this.devices = [];
-    this.currentFPS = CAMERA_CONFIG.fps.default;
+    this.config = getCameraConfig();
   }
 
+  // TODO [Basic] inisiasi elemen video dan canvas
   initializeElements(videoId, canvasId) {
     this.video = document.getElementById(videoId);
     this.canvas = document.getElementById(canvasId);
   }
 
-  /**
-   * Enumerates available video input devices. When `cameraSelect` is
-   * provided and device labels are available (i.e. permission was already
-   * granted at least once), the dropdown options are replaced with the real
-   * device list instead of the generic "Belakang/Depan" placeholders.
-   */
+  // TODO [Basic] Tambahkan konfigurasi kamera untuk mendapatkan daftar perangkat input video
+  // TODO [Basic] Dapatkan constraints kamera berdasarkan konfigurasi dan kamera yang dipilih
   async loadCameras(cameraSelect) {
-    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Browser ini tidak mendukung akses kamera.");
+    }
 
     try {
-      const allDevices = await navigator.mediaDevices.enumerateDevices();
-      this.devices = allDevices.filter((device) => device.kind === "videoinput");
+      const tempStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter((device) => device.kind === "videoinput");
 
-      const hasLabels = this.devices.some((device) => Boolean(device.label));
+      tempStream.getTracks().forEach((track) => track.stop());
 
-      if (cameraSelect && hasLabels) {
-        const previousValue = cameraSelect.value;
+      if (cameraSelect) {
         cameraSelect.innerHTML = "";
 
-        this.devices.forEach((device, index) => {
+        cameras.forEach((camera, index) => {
           const option = document.createElement("option");
-          option.value = device.deviceId;
-          option.textContent = device.label || `Kamera ${index + 1}`;
+          option.value = camera.deviceId;
+          option.textContent = camera.label || `Kamera ${index + 1}`;
           cameraSelect.appendChild(option);
         });
-
-        const stillExists = this.devices.some((device) => device.deviceId === previousValue);
-        if (stillExists) cameraSelect.value = previousValue;
       }
 
-      return this.devices;
+      return cameras;
     } catch (error) {
-      logError("CameraService.loadCameras", error);
-      return [];
-    }
-  }
-
-  /**
-   * Builds getUserMedia constraints. If `selectedValue` matches a real
-   * enumerated deviceId, that device is targeted directly. Otherwise it
-   * falls back to the default "Belakang"/"Depan" facingMode options.
-   */
-  #getConstraints(selectedValue) {
-    const { videoConstraints, defaultFacingMode, frontFacingMode } = this.config;
-    const isRealDeviceId = this.devices.some((device) => device.deviceId === selectedValue);
-
-    if (isRealDeviceId) {
-      return {
-        audio: false,
-        video: {
-          ...videoConstraints,
-          deviceId: { exact: selectedValue },
-        },
-      };
-    }
-
-    const facingMode = selectedValue === "front" ? frontFacingMode : defaultFacingMode;
-    return {
-      audio: false,
-      video: {
-        ...videoConstraints,
-        facingMode,
-      },
-    };
-  }
-
-  async startCamera(videoId, canvasId, cameraSelect) {
-    this.initializeElements(videoId, canvasId);
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Browser tidak mendukung akses kamera (MediaStream API).");
-    }
-
-    this.stopCamera();
-
-    const selectedValue = cameraSelect?.value ?? "default";
-    const constraints = this.#getConstraints(selectedValue);
-
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (error) {
-      logError("CameraService.startCamera", error);
+      logError("Gagal memuat daftar kamera", error);
       throw new Error(getCameraErrorMessage(error));
     }
-
-    if (this.video) {
-      this.video.srcObject = this.stream;
-      await new Promise((resolve) => {
-        this.video.onloadedmetadata = () => {
-          this.video.play();
-          resolve();
-        };
-      });
-    }
-
-    this.setFPS(this.currentFPS);
-
-    // Permission is granted now, so device labels are readable — refresh
-    // the dropdown with real device names instead of the generic fallback.
-    await this.loadCameras(cameraSelect);
-
-    return this.stream;
   }
 
+  // TODO [Basic] Memulai kamera dengan perangkat yang dipilih dan menampilkan pada elemen video
+  async startCamera(videoId, canvasId, cameraSelect) {
+    try {
+      this.initializeElements(videoId, canvasId);
+      this.stopCamera();
+
+      const selectedCameraId = cameraSelect?.value || undefined;
+      const constraints = getCameraConstraints(selectedCameraId, this.config);
+
+      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      if (this.video) {
+        this.video.srcObject = this.stream;
+        await this.video.play();
+      }
+
+      return true;
+    } catch (error) {
+      logError("Gagal memulai kamera", error);
+      throw new Error(getCameraErrorMessage(error));
+    }
+  }
+
+  // TODO [Basic] Menghentikan siaran kamera dan membersihkan sumber daya
   stopCamera() {
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
     }
+
     if (this.video) {
+      this.video.pause();
       this.video.srcObject = null;
     }
   }
 
-  /** Configurable FPS Limit — throttles the *detection loop*, and is also
-   * applied to the live capture track via applyConstraints when supported. */
+  // TODO [Skilled] Implementasikan metode untuk mengatur FPS kamera
   setFPS(fps) {
-    const { min, max } = this.config.fps;
-    this.currentFPS = Math.min(Math.max(fps, min), max);
+    const parsedFPS = Number(fps);
 
-    const track = this.stream?.getVideoTracks?.()[0];
-    if (track && typeof track.applyConstraints === "function") {
-      track.applyConstraints({ frameRate: { ideal: this.currentFPS } }).catch(() => {
-        // Not all devices/browsers support live frameRate renegotiation —
-        // the detection loop throttle below still enforces the FPS limit.
-      });
+    if (
+      Number.isNaN(parsedFPS) ||
+      parsedFPS < this.config.fpsRange.min ||
+      parsedFPS > this.config.fpsRange.max
+    ) {
+      logError(
+        "FPS tidak valid",
+        new Error(
+          `FPS harus berada di antara ${this.config.fpsRange.min}-${this.config.fpsRange.max}.`,
+        ),
+      );
+      return;
     }
 
-    return this.currentFPS;
+    this.config.defaultFPS = parsedFPS;
   }
 
-  getFPS() {
-    return this.currentFPS;
-  }
-
+  // TODO [Basic] Periksa apakah kamera sedang aktif
   isActive() {
-    return Boolean(
-      this.stream && this.stream.getVideoTracks().some((track) => track.readyState === "live"),
+    return Boolean(this.stream?.active);
+  }
+
+  isReady() {
+    return (
+      this.isActive() &&
+      this.video &&
+      this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+      !this.video.paused
     );
+  }
+
+  captureFrame() {
+    if (!this.isReady() || !this.canvas) {
+      return null;
+    }
+
+    const context = this.canvas.getContext("2d");
+
+    this.canvas.width = this.video.videoWidth;
+    this.canvas.height = this.video.videoHeight;
+    context.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+
+    return this.canvas;
   }
 }
 

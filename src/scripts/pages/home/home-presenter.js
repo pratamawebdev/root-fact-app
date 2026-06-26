@@ -1,286 +1,250 @@
 import { APP_CONFIG } from "../../config.js";
-import { isValidDetection, createDelay, logError } from "../../utils/index.js";
+import CameraService from "../../services/camera.service.js";
+import DetectionService from "../../services/detection.service.js";
+import RootFactsService from "../../services/rootfacts.service.js";
+import { createDelay, isValidDetection, logError } from "../../utils/index.js";
 
-const VIDEO_ID = "media-video";
-const CANVAS_ID = "media-canvas";
-
-/**
- * Alur scan:
- * 1. User klik tombol scan
- * 2. Kamera hidup → tunggu warm-up delay agar sensor stabil
- * 3. Deteksi loop berjalan; tiap inferensi diselingi settle delay
- * 4. Jika hasil valid, label dikunci
- * 5. Loop berhenti, kamera dimatikan
- * 6. Hasil + fun fact tampil
- * 7. Scan ulang hanya jika user klik tombol lagi
- *
- * Reset state (label, fakta, TF.js memory) dilakukan di awal setiap scan
- * agar percobaan kedua dan seterusnya dimulai dari kondisi bersih.
- */
 export default class HomePresenter {
-  #view;
-  #cameraService;
-  #detectionService;
-  #rootFactsService;
+  #view = null;
+  #cameraService = null;
+  #detectionService = null;
+  #rootFactsService = null;
+  #timer = null;
+  #currentLoopId = null;
+  #lastDetection = null;
+  #queuedTone = null;
 
-  #isScanning = false;
-  #isBusy = false;
-  #loopTimeoutId = null;
-
-  // Flag: true selama periode warm-up setelah kamera menyala.
-  // Inferensi tidak boleh berjalan sebelum warm-up selesai.
-  #isWarmingUp = false;
-
-  #currentTone = "normal";
-  #currentLabel = "";
-  #lastFact = "";
-  #loadProgress = { vision: 0, language: 0 };
-
-  constructor({ view, cameraService, detectionService, rootFactsService }) {
+  constructor({ view }) {
     this.#view = view;
-    this.#cameraService = cameraService;
-    this.#detectionService = detectionService;
-    this.#rootFactsService = rootFactsService;
+    this.#cameraService = new CameraService();
+    this.#detectionService = new DetectionService((progress) => {
+      this.#view.showModelLoading(progress.progress, progress.message);
+    });
+    this.#rootFactsService = new RootFactsService((progress) => {
+      this.#view.showStatus(progress.message);
+    });
   }
 
-  async init() {
-    this.#view.showIdleState();
-    this.#reportLoadProgress("vision", 0);
+  async initialApp() {
+    this.#view.showInitialLoading();
 
     try {
-      await Promise.all([
-        this.#detectionService.loadModel((fraction) =>
-          this.#reportLoadProgress("vision", fraction),
-        ),
-        this.#rootFactsService.loadModel((fraction) =>
-          this.#reportLoadProgress("language", fraction),
-        ),
-      ]);
-
-      this.#view.setStatus("Siap digunakan", "active");
-      await this.#cameraService.loadCameras(
-        this.#view.getCameraSelectElement(),
+      await this.#cameraService.loadCameras(this.#view.getCameraSelectElement());
+      const detectionInfo = await this.#detectionService.loadModel();
+      this.#view.showLoadingState(
+        "Memuat model AI untuk menghasilkan fun fact...",
+        "Menyiapkan Fun Fact...",
       );
+      this.#view.showStatus("Memuat model AI...");
+      const factsInfo = await this.#rootFactsService.loadModel();
+
+      this.#view.showModelReady(detectionInfo.backend, factsInfo.backend);
+      this.#view.enableToggleButton();
+      this.#view.showIdleState();
     } catch (error) {
-      logError("HomePresenter.init", error);
-      this.#view.setStatus("Gagal memuat model AI", "error");
+      logError("Initial app gagal", error);
+      this.#view.showError(error.message);
     }
   }
 
-  #reportLoadProgress(part, fraction) {
-    this.#loadProgress[part] = Math.min(Math.max(fraction, 0), 1);
-
-    const percent = Math.round(
-      ((this.#loadProgress.vision + this.#loadProgress.language) / 2) * 100,
-    );
-
-    this.#view.setStatus(`Menunggu Model... ${percent}%`, "idle");
-  }
-
-  async handleToggleScan() {
-    if (this.#isScanning) {
-      this.#stopScanManually();
-      return;
-    }
-
-    await this.#startScan();
-  }
-
-  async #startScan() {
-    // ── Reset memory dari sesi sebelumnya ────────────────────────────────
-    // Bersihkan tensor TF.js yang tersisa dan reset statistik performa
-    // agar percobaan kedua+ dimulai dari kondisi benar-benar bersih.
-    this.#detectionService.reset();
-    this.#currentLabel = "";
-    this.#lastFact = "";
+  async startCamera() {
+    this.#view.showCameraLoading();
+    this.#view.showStatus("Mengakses kamera...");
 
     try {
       await this.#cameraService.startCamera(
-        VIDEO_ID,
-        CANVAS_ID,
+        "media-video",
+        "media-canvas",
         this.#view.getCameraSelectElement(),
       );
+
+      this.#view.hideCameraLoading();
+      this.#view.showCameraActive();
+      this.#view.showLoadingState(
+        "Mencari Sayuran..."
+      );
+      this.#view.showStatus("Kamera aktif. Memulai deteksi...");
+
+      this.#startDetectionLoop();
     } catch (error) {
-      logError("HomePresenter.startScan", error);
-      this.#view.showCameraError(error.message || "Gagal memulai kamera");
-      return;
+      logError("Start camera gagal", error);
+      this.#view.showError(error.message);
     }
-
-    this.#isScanning = true;
-    this.#isBusy = false;
-    this.#isWarmingUp = true;
-
-    this.#view.setCameraActiveUI(true);
-    this.#view.showSearchingState();
-    this.#view.setStatus("Menyiapkan kamera...", "idle");
-
-    // ── Warm-up delay ─────────────────────────────────────────────────────
-    // Beri waktu sensor kamera untuk menstabilkan eksposur & white balance.
-    // Tanpa delay ini, frame pertama sering hitam atau gelap sehingga
-    // model akan salah mengklasifikasi (terutama di scan kedua+).
-    await createDelay(APP_CONFIG.cameraWarmupDelay);
-
-    if (!this.#isScanning) return; // user bisa membatalkan selama warmup
-
-    this.#isWarmingUp = false;
-    this.#view.setStatus("Mendeteksi...", "active");
-    this.#scheduleNextTick();
   }
 
-  #stopScanManually() {
-    this.#isScanning = false;
-    this.#isBusy = false;
-    this.#isWarmingUp = false;
-
-    if (this.#loopTimeoutId) {
-      clearTimeout(this.#loopTimeoutId);
-      this.#loopTimeoutId = null;
-    }
-
+  stopCamera() {
+    this.#stopDetectionLoop();
     this.#cameraService.stopCamera();
-
-    // Bersihkan state dan memory saat user menghentikan scan secara manual
-    this.#detectionService.reset();
-    this.#currentLabel = "";
-    this.#lastFact = "";
-
-    this.#view.setCameraActiveUI(false);
+    this.#view.showCameraInactive();
     this.#view.showIdleState();
-    this.#view.setStatus("Siap digunakan", "active");
+    this.#view.showStatus("Siap untuk scan");
   }
 
-  #stopScanAfterDetection() {
-    this.#isScanning = false;
-    this.#isWarmingUp = false;
-
-    if (this.#loopTimeoutId) {
-      clearTimeout(this.#loopTimeoutId);
-      this.#loopTimeoutId = null;
-    }
-
-    this.#cameraService.stopCamera();
-
-    this.#view.setCameraActiveUI(false);
-    this.#view.setStatus("Ketuk tombol untuk scan ulang", "active");
-  }
-
-  #scheduleNextTick() {
-    if (!this.#isScanning || this.#isWarmingUp) return;
-
-    // Hitung interval: gunakan nilai terbesar antara target FPS interval
-    // dan inferenceSettleDelay untuk memastikan frame benar-benar stabil
-    // sebelum inferensi berikutnya dijalankan.
-    const fpsInterval = Math.round(1000 / this.#cameraService.getFPS());
-    const interval = Math.max(
-      fpsInterval,
-      APP_CONFIG.detectionRetryInterval,
-      APP_CONFIG.inferenceSettleDelay,
-    );
-
-    this.#loopTimeoutId = setTimeout(() => this.#tick(), interval);
-  }
-
-  async #tick() {
-    if (!this.#isScanning || this.#isBusy || this.#isWarmingUp) {
-      this.#scheduleNextTick();
+  toggleCamera() {
+    if (this.#cameraService.isActive()) {
+      this.stopCamera();
       return;
     }
 
-    const video = this.#view.getVideoElement();
+    this.startCamera();
+  }
 
-    // Pastikan video benar-benar siap: readyState 4 (HAVE_ENOUGH_DATA)
-    // jauh lebih aman daripada readyState 2 untuk inferensi — frame sudah
-    // stabil dan tidak berisi data parsial.
-    if (!video || video.readyState < 4) {
-      this.#scheduleNextTick();
+  async changeCamera() {
+    if (!this.#cameraService.isActive()) {
       return;
     }
 
-    // Tambahan guard: skip jika video masih paused atau ukurannya belum ada
-    if (video.paused || video.videoWidth === 0 || video.videoHeight === 0) {
-      this.#scheduleNextTick();
+    this.#stopDetectionLoop();
+    await this.startCamera();
+  }
+
+  setFPS(fps) {
+    this.#cameraService.setFPS(fps);
+
+    if (this.#cameraService.isActive()) {
+      this.#startDetectionLoop();
+    }
+  }
+
+  async setTone(tone) {
+    this.#rootFactsService.setTone(tone);
+
+    if (!this.#lastDetection) {
+      return;
+    }
+
+    if (this.#rootFactsService.isGenerating) {
+      this.#queuedTone = tone;
+      return;
+    }
+
+    await this.#generateFacts(this.#lastDetection.className, tone);
+  }
+
+  async copyFact() {
+    const fact = this.#view.getCurrentFact();
+    if (!fact) {
       return;
     }
 
     try {
-      const result = await this.#detectionService.predict(video);
+      await navigator.clipboard.writeText(fact);
+      this.#view.showCopySuccess();
+      this.#view.showStatus("Fakta berhasil disalin");
+    } catch (error) {
+      logError("Salin fakta gagal", error);
+      this.#view.showStatus("Gagal menyalin fakta");
+    }
+  }
+
+  #startDetectionLoop() {
+    this.#stopDetectionLoop();
+
+    const fps = Math.max(15, Math.min(60, this.#view.getFPSValue()));
+    const interval = Math.round(1000 / fps);
+    const loopId = Date.now();
+
+    this.#currentLoopId = loopId;
+    this.#runDetectionLoop(loopId, interval);
+  }
+
+  #stopDetectionLoop() {
+    if (this.#timer) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+
+    this.#currentLoopId = null;
+  }
+
+  async #runDetectionLoop(loopId, interval) {
+    if (!this.#cameraService.isActive() || this.#currentLoopId !== loopId) {
+      return;
+    }
+
+    await this.#detectionLoop(loopId);
+
+    if (!this.#cameraService.isActive() || this.#currentLoopId !== loopId) {
+      return;
+    }
+
+    this.#timer = setTimeout(() => {
+      this.#runDetectionLoop(loopId, interval);
+    }, interval);
+  }
+
+  async #detectionLoop(loopId) {
+    if (!this.#cameraService.isActive() || this.#currentLoopId !== loopId) {
+      return;
+    }
+
+    const canvas = this.#cameraService.captureFrame();
+
+    if (!canvas) {
+      return;
+    }
+
+    try {
+      const result = await this.#detectionService.predict(canvas);
 
       if (isValidDetection(result)) {
-        await this.#lockInDetection(result);
+        this.#stopDetectionLoop();
+        this.#view.showLoadingState(
+          `Label ${result.className} terdeteksi dengan kepercayaan ${result.confidence}%.`,
+          "Menganalisis Hasil...",
+        );
+
+        await createDelay(APP_CONFIG.analyzingDelay);
+
+        this.#cameraService.stopCamera();
+        this.#view.showCameraInactive();
+        this.#view.showResultState(result);
+        this.#lastDetection = result;
+        this.#view.showStatus(
+          `Terdeteksi: ${result.className} (${result.confidence}%)`,
+        );
+        await this.#generateFacts(result.className, this.#view.getSelectedTone());
+
         return;
       }
 
-      this.#view.showSearchingState();
-      this.#view.setStatus("Mendeteksi...", "active");
+      const topPrediction = result.allPredictions?.[0];
+      if (topPrediction) {
+        this.#view.showScanningHint(topPrediction);
+      }
     } catch (error) {
-      logError("HomePresenter.tick", error);
+      logError("Loop deteksi gagal", error);
+      this.#view.showStatus("Prediksi gagal. Sistem mencoba ulang...");
     }
-
-    this.#scheduleNextTick();
   }
 
-  async #lockInDetection(result) {
-    this.#isBusy = true;
-    this.#currentLabel = result.label;
-
-    this.#stopScanAfterDetection();
-
-    this.#view.showResultState({
-      label: result.label,
-      confidence: result.confidence,
-    });
-
-    this.#view.setFunFactLoading(true);
+  async #generateFacts(className, tone) {
+    this.#view.showFactLoading(tone);
+    this.#view.showStatus(`Membuat fakta ${this.#view.getToneLabel(tone)}...`);
 
     try {
-      const [factText] = await Promise.all([
-        this.#rootFactsService.generateFacts(result.label, this.#currentTone),
-        createDelay(APP_CONFIG.factsGenerationDelay),
-      ]);
-
-      this.#lastFact = factText || "Fakta menarik tidak tersedia saat ini.";
-      this.#view.setFunFactText(this.#lastFact);
-    } catch (error) {
-      logError("HomePresenter.lockInDetection", error);
-
-      this.#lastFact = "";
-      this.#view.setFunFactText(
-        "Gagal membuat fakta menarik. Coba scan ulang.",
+      const result = await this.#rootFactsService.generateFacts(className, tone);
+      this.#view.showFactSuccess(result.fact);
+      this.#view.showStatus(
+        `Siap`,
       );
-    } finally {
-      this.#view.setFunFactLoading(false);
-      this.#isBusy = false;
-    }
-  }
-
-  handleCameraChange() {
-    if (!this.#isScanning) return;
-
-    this.#cameraService
-      .startCamera(VIDEO_ID, CANVAS_ID, this.#view.getCameraSelectElement())
-      .catch((error) => {
-        logError("HomePresenter.handleCameraChange", error);
-        this.#view.showCameraError(error.message || "Gagal mengganti kamera");
-      });
-  }
-
-  handleFPSChange(fps) {
-    const applied = this.#cameraService.setFPS(fps);
-    this.#view.setFPSLabel(applied);
-  }
-
-  handleToneChange(tone) {
-    this.#currentTone = this.#rootFactsService.setTone(tone);
-  }
-
-  async handleCopyFact() {
-    if (!this.#lastFact) return;
-
-    try {
-      await navigator.clipboard.writeText(this.#lastFact);
-      this.#view.flashCopyButton();
     } catch (error) {
-      logError("HomePresenter.handleCopyFact", error);
+      logError("Generasi fakta gagal", error);
+      this.#view.showFactError(error.message);
+      this.#view.showStatus("Fakta gagal dibuat");
     }
+
+    if (
+      this.#queuedTone &&
+      this.#queuedTone !== tone &&
+      this.#lastDetection?.className
+    ) {
+      const nextTone = this.#queuedTone;
+      this.#queuedTone = null;
+      await this.#generateFacts(this.#lastDetection.className, nextTone);
+      return;
+    }
+
+    this.#queuedTone = null;
   }
 }
