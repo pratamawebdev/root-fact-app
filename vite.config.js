@@ -6,75 +6,68 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'model/*'],
+      strategies: 'injectManifest',
+      srcDir: 'public',
+      filename: 'sw.js',
+      injectRegister: false, // Kita sudah register manual di index.html
       manifest: {
-        name: 'RootFacts - AI Plant & Root Recognition',
+        name: 'RootFacts - AI Plant/Root Recognition',
         short_name: 'RootFacts',
-        description:
-          'Aplikasi AI untuk mengenali tanaman dan akar serta memberikan fakta menarik',
+        description: 'Aplikasi AI untuk mengenali tanaman dan sayuran serta memberikan fakta menarik',
         theme_color: '#10b981',
+        background_color: '#f9fafb',
+        display: 'standalone',
+        scope: '/',
+        start_url: '/',
+        orientation: 'portrait',
         icons: [
           {
-            src: 'icons/icon-192x192.png',
+            src: '/icons/icon-192x192.png',
             sizes: '192x192',
             type: 'image/png',
+            purpose: 'any'
           },
           {
-            src: 'icons/icon-512x512.png',
+            src: '/icons/icon-512x512.png',
             sizes: '512x512',
             type: 'image/png',
+            purpose: 'any'
           },
           {
-            src: 'icons/icon-512x512.png',
+            src: '/icons/icon-512x512.png',
             sizes: '512x512',
             type: 'image/png',
-            purpose: 'any maskable',
-          },
+            purpose: 'maskable'
+          }
         ],
-      },
-      workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,bin}'],
-
-        runtimeCaching: [
+        screenshots: [
           {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
+            src: '/icons/icon-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            form_factor: 'wide',
+            label: 'RootFacts App'
           },
           {
-            urlPattern: /^https:\/\/huggingface\.co\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'transformers-models',
-              expiration: {
-                maxEntries: 20,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
+            src: '/icons/icon-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'RootFacts App Mobile'
+          }
+        ]
+      },
+      injectManifest: {
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,woff,woff2,wasm}',
+          'model/**/*.{json,bin}'
         ],
-      },
-      devOptions: {
-        enabled: true,
-      },
-    }),
+        maximumFileSizeToCacheInBytes: 30 * 1024 * 1024 // 30 MB untuk WASM + model
+      }
+    })
   ],
   server: {
     port: 3001,
-    host: true,
-  },
+    host: true
+  }
 });

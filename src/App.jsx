@@ -1,4 +1,5 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
+import { CheckCircle } from 'lucide-react';
 import Header from './components/Header';
 import CameraSection from './components/CameraSection';
 import InfoPanel from './components/InfoPanel';
@@ -6,179 +7,221 @@ import { useAppState } from './hooks/useAppState';
 import { CameraService } from './services/CameraService';
 import { DetectionService } from './services/DetectionService';
 import { RootFactsService } from './services/RootFactsService';
-import { APP_CONFIG, isValidDetection } from './utils/config';
+import { APP_CONFIG } from './utils/config';
 
 function App() {
   const { state, actions } = useAppState();
   const detectionCleanupRef = useRef(null);
   const isRunningRef = useRef(false);
-  const appStateRef = useRef('idle'); // Gunakan ref untuk state aplikasi agar loop selalu mendapat nilai terbaru
   const [currentTone, setCurrentTone] = useState('normal');
+  const [toastMessage, setToastMessage] = useState(null);
+  const toastTimerRef = useRef(null);
 
-  // Sinkronkan ref dengan state (untuk digunakan di dalam loop async)
-  useEffect(() => {
-    appStateRef.current = state.appState;
-  }, [state.appState]);
+  const showToast = useCallback((message) => {
+    setToastMessage(message);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), 2000);
+  }, []);
 
-  // Inisialisasi layanan deteksi, kamera, dan generator fakta saat aplikasi dimuat
+  // Refs untuk services agar stabil di callbacks
+  const cameraRef = useRef(null);
+  const detectorRef = useRef(null);
+  const generatorRef = useRef(null);
+
+  // TODO [Basic] Inisialisasi layanan deteksi, kamera, dan generator fakta saat aplikasi dimuat
   useEffect(() => {
+    let cancelled = false;
+
     const initServices = async () => {
       try {
-        actions.setModelStatus('Menyiapkan Backend AI...');
-
         const camera = new CameraService();
         const detector = new DetectionService();
         const generator = new RootFactsService();
 
+        cameraRef.current = camera;
+        detectorRef.current = detector;
+        generatorRef.current = generator;
+
         actions.setServices({ camera, detector, generator });
 
-        // Load models
-        actions.setModelStatus('Memuat Model Deteksi (TF.js)...');
-        await detector.loadModel();
+        // Muat model deteksi dengan progress callback
+        actions.setModelStatus('Memuat Model Deteksi... 0%');
+        await detector.loadModel((progress) => {
+          if (!cancelled) {
+            actions.setModelStatus(`Memuat Model... ${progress}%`);
+          }
+        });
 
-        actions.setModelStatus('Memuat Model Bahasa (Transformers.js)...');
-        // Note: We could implement a progress callback in RootFactsService for percentage
-        await generator.loadModel();
+        // Muat model AI untuk fakta
+        if (!cancelled) {
+          actions.setModelStatus('Memuat Model AI... 50%');
+        }
+        await generator.loadModel((progress) => {
+          if (!cancelled) {
+            actions.setModelStatus(`Memuat Model... ${progress}%`);
+          }
+        });
 
-        actions.setModelStatus('Model AI Siap');
-        actions.setAppState('idle');
+        if (!cancelled) {
+          actions.setModelStatus('Model AI Siap');
+        }
       } catch (error) {
-        console.error('Initialization error:', error);
-        actions.setError(
-          'Gagal memuat model AI. Pastikan koneksi internet stabil.',
-        );
-        actions.setModelStatus('Gagal Memuat Model');
+        console.error('Gagal inisialisasi:', error);
+        if (!cancelled) {
+          actions.setModelStatus('Gagal memuat model');
+          actions.setError('Gagal memuat model. Periksa koneksi.');
+        }
       }
     };
 
     initServices();
 
-    // Bersihkan sumber daya saat komponen ditinggalkan
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // TODO [Basic] Bersihkan sumber daya saat komponen ditinggalkan
+  useEffect(() => {
     return () => {
       isRunningRef.current = false;
       if (detectionCleanupRef.current) {
-        cancelAnimationFrame(detectionCleanupRef.current);
+        detectionCleanupRef.current();
       }
-      if (state.services.camera) {
-        state.services.camera.stopCamera();
+      if (cameraRef.current) {
+        cameraRef.current.stopCamera();
       }
     };
   }, []);
 
-  // Fungsi untuk memulai loop deteksi
-  const startDetectionLoop = useCallback(async () => {
-    if (!isRunningRef.current) return;
+  // TODO [Basic] Fungsi untuk memulai loop deteksi
+  const startDetectionLoop = useCallback(() => {
+    isRunningRef.current = true;
+    let animationFrameId = null;
+    let lastTime = 0;
 
-    const { detector, camera, generator } = state.services;
+    const detect = async (timestamp) => {
+      if (!isRunningRef.current) return;
 
-    if (
-      camera.isReady() &&
-      detector.isLoaded() &&
-      appStateRef.current === 'idle'
-    ) {
-      try {
-        const result = await detector.predict(camera.video);
+      const camera = cameraRef.current;
+      const detector = detectorRef.current;
+      const generator = generatorRef.current;
 
-        if (isValidDetection(result)) {
-          // Berhenti memindai segera setelah ditemukan
-          isRunningRef.current = false;
-          actions.setDetectionResult(result);
-          actions.setFunFactData(null);
-          actions.setAppState('result');
-
-          // Buat pembatalan jika terlalu lama
-          const timeoutId = setTimeout(() => {
-            if (state.funFactData === null) {
-              actions.setFunFactData('error');
-            }
-          }, 10000); // 10 detik timeout
-
-          try {
-            const fact = await generator.generateFacts(result.className);
-            clearTimeout(timeoutId);
-
-            actions.setFunFactData({
-              label: result.className,
-              fact: fact,
-              timestamp: new Date().toLocaleTimeString(),
-            });
-          } catch (genError) {
-            clearTimeout(timeoutId);
-            console.error('Fact generation error:', genError);
-            actions.setFunFactData('error');
-          }
-        }
-      } catch (error) {
-        console.error('Detection loop error:', error);
+      if (!camera || !detector || !generator) {
+        animationFrameId = requestAnimationFrame(detect);
+        return;
       }
-    }
 
-    if (isRunningRef.current) {
-      detectionCleanupRef.current = requestAnimationFrame(startDetectionLoop);
-    }
-  }, [state.services, state.appState, actions]);
+      // FPS limiter
+      const frameInterval = camera.getFrameInterval();
+      if (timestamp - lastTime < frameInterval) {
+        animationFrameId = requestAnimationFrame(detect);
+        return;
+      }
+      lastTime = timestamp;
 
-  // Fungsi untuk mereset aplikasi agar bisa memindai kembali
-  const handleReset = useCallback(() => {
-    appStateRef.current = 'idle';
-    actions.setAppState('idle');
-    actions.setDetectionResult(null);
-    actions.setFunFactData(null);
-    if (state.isRunning) {
-      isRunningRef.current = true;
-      startDetectionLoop();
-    }
-  }, [actions, state.isRunning, startDetectionLoop]);
-
-  // Fungsi untuk memulai dan menghentikan kamera
-  const handleCameraToggle = useCallback(
-    async (cameraId) => {
-      const { camera } = state.services;
-
-      if (state.isRunning) {
-        isRunningRef.current = false;
-        if (detectionCleanupRef.current) {
-          cancelAnimationFrame(detectionCleanupRef.current);
-        }
-        camera.stopCamera();
-        actions.setRunning(false);
-        actions.setAppState('idle');
-      } else {
+      if (camera.isReady() && detector.isLoaded()) {
         try {
-          await camera.startCamera(cameraId);
-          actions.setRunning(true);
-          isRunningRef.current = true;
-          startDetectionLoop();
+          const result = await detector.predict(camera.video);
+
+          if (result && result.isValid) {
+            // Tampilkan hasil deteksi
+            actions.setDetectionResult(result);
+            actions.setAppState('analyzing');
+            actions.setFunFactData(null);
+
+            // Hentikan loop sementara untuk generate fakta
+            isRunningRef.current = false;
+
+            try {
+              const fact = await generator.generateFacts(result.className);
+              actions.setFunFactData(fact || 'error');
+              actions.setAppState('result');
+            } catch (err) {
+              console.error('Gagal generate fakta:', err);
+              actions.setFunFactData('error');
+              actions.setAppState('result');
+            }
+
+            // Lanjutkan loop setelah delay
+            await new Promise((r) => setTimeout(r, APP_CONFIG.factsGenerationDelay));
+            if (camera.isActive()) {
+              isRunningRef.current = true;
+              animationFrameId = requestAnimationFrame(detect);
+            }
+            return;
+          }
         } catch (error) {
-          actions.setError(
-            'Gagal mengakses kamera. Pastikan izin telah diberikan.',
-          );
+          console.error('Deteksi error:', error);
         }
       }
-    },
-    [state.services, state.isRunning, actions, startDetectionLoop],
-  );
 
-  // Fungsi untuk mengubah nada fakta yang dihasilkan
-  const handleToneChange = useCallback(
-    (tone) => {
-      setCurrentTone(tone);
-      if (state.services.generator) {
-        state.services.generator.setTone(tone);
+      animationFrameId = requestAnimationFrame(detect);
+    };
+
+    animationFrameId = requestAnimationFrame(detect);
+
+    // Cleanup function
+    detectionCleanupRef.current = () => {
+      isRunningRef.current = false;
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
       }
-    },
-    [state.services.generator],
-  );
+    };
+  }, [actions]);
 
-  // Fungsi untuk menyalin fakta ke clipboard
-  const handleCopyToClipboard = useCallback(async () => {
-    if (state.funFactData && state.funFactData.fact) {
+  // TODO [Basic] Fungsi untuk memulai dan menghentikan kamera
+  const handleToggleCamera = useCallback(async () => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    if (camera.isActive()) {
+      // Stop
+      isRunningRef.current = false;
+      if (detectionCleanupRef.current) {
+        detectionCleanupRef.current();
+      }
+      camera.stopCamera();
+      actions.setRunning(false);
+      actions.resetResults();
+    } else {
+      // Start
       try {
-        await navigator.clipboard.writeText(state.funFactData.fact);
-        // You might want to show a toast or temporary "Copied!" state
-        alert('Teks berhasil disalin ke papan klip!');
-      } catch (err) {
-        console.error('Failed to copy text: ', err);
+        await camera.startCamera();
+        actions.setRunning(true);
+        actions.setError(null);
+        startDetectionLoop();
+      } catch (error) {
+        console.error('Gagal memulai kamera:', error);
+        actions.setError('Gagal memulai kamera. Periksa izin kamera.');
+      }
+    }
+  }, [actions, startDetectionLoop]);
+
+  // TODO [Advance] Fungsi untuk mengubah nada fakta yang dihasilkan
+  const handleToneChange = useCallback((tone) => {
+    setCurrentTone(tone);
+    if (generatorRef.current) {
+      generatorRef.current.setTone(tone);
+    }
+  }, []);
+
+  // TODO [Skilled] Fungsi untuk menyalin fakta ke clipboard
+  const handleCopyFact = useCallback(async () => {
+    if (state.funFactData && state.funFactData !== 'error') {
+      try {
+        await navigator.clipboard.writeText(state.funFactData);
+        showToast('Fakta berhasil disalin!');
+      } catch (error) {
+        console.error('Gagal menyalin:', error);
+        // Fallback
+        const textArea = document.createElement('textarea');
+        textArea.value = state.funFactData;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showToast('Fakta berhasil disalin!');
       }
     }
   }, [state.funFactData]);
@@ -190,7 +233,7 @@ function App() {
       <main className="main-content">
         <CameraSection
           isRunning={state.isRunning}
-          onToggleCamera={handleCameraToggle}
+          onToggleCamera={handleToggleCamera}
           onToneChange={handleToneChange}
           services={state.services}
           modelStatus={state.modelStatus}
@@ -201,10 +244,9 @@ function App() {
         <InfoPanel
           appState={state.appState}
           detectionResult={state.detectionResult}
-          funFactData={state.funFactData ? state.funFactData.fact : null}
-          onCopyFact={handleCopyToClipboard}
-          onReset={handleReset}
+          funFactData={state.funFactData}
           error={state.error}
+          onCopyFact={handleCopyFact}
         />
       </main>
 
@@ -213,26 +255,24 @@ function App() {
       </footer>
 
       {state.error && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '1rem',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            maxWidth: '380px',
-            padding: '0.875rem 1rem',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 'var(--radius-md)',
-            color: '#991b1b',
-            fontSize: '0.8125rem',
-            boxShadow: 'var(--shadow-lg)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            zIndex: 1000,
-          }}
-        >
+        <div style={{
+          position: 'fixed',
+          bottom: '1rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          maxWidth: '380px',
+          padding: '0.875rem 1rem',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 'var(--radius-md)',
+          color: '#991b1b',
+          fontSize: '0.8125rem',
+          boxShadow: 'var(--shadow-lg)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          zIndex: 1000
+        }}>
           <strong>Error:</strong> {state.error}
           <button
             onClick={() => actions.setError(null)}
@@ -244,11 +284,18 @@ function App() {
               cursor: 'pointer',
               color: '#991b1b',
               padding: 0,
-              lineHeight: 1,
+              lineHeight: 1
             }}
           >
             ×
           </button>
+        </div>
+      )}
+
+      {toastMessage && (
+        <div className="toast-notification">
+          <CheckCircle size={16} />
+          <span>{toastMessage}</span>
         </div>
       )}
     </div>

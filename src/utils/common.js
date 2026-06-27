@@ -25,3 +25,25 @@ export const getCameraErrorMessage = (error) => {
 
   return errorMessages[error.name] || 'Gagal memulai kamera';
 };
+
+export const getConfidenceTheme = (confidence) => {
+  if (confidence >= 80) return 'theme-green';
+  if (confidence >= 60) return 'theme-yellow';
+  return 'theme-red';
+};
+
+export const getConfidenceTextClass = (confidence) => {
+  if (confidence >= 80) return 'text-green';
+  if (confidence >= 60) return 'text-yellow';
+  return 'text-red';
+};
+
+export const createProgressBarStyle = (percentage, duration = '1s') => ({
+  width: `${percentage}%`,
+  transition: `width ${duration} ease-out`
+});
+
+export const isValidDetection = (result) => {
+  const { detectionConfidenceThreshold } = APP_CONFIG;
+  return result && result.isValid && result.confidence >= detectionConfidenceThreshold;
+};

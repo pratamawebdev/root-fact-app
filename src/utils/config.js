@@ -1,6 +1,4 @@
 export const APP_CONFIG = {
-  detectionConfidenceThreshold: 60,
-
   analyzingDelay: 2000,
   factsGenerationDelay: 2000,
   detectionRetryInterval: 100
@@ -14,9 +12,4 @@ export const TONE_CONFIG = {
     { value: 'casual', label: 'Santai' }
   ],
   defaultTone: 'normal'
-};
-
-export const isValidDetection = (result) => {
-  const { detectionConfidenceThreshold } = APP_CONFIG;
-  return result && result.isValid && result.confidence >= detectionConfidenceThreshold;
 };

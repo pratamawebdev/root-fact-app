@@ -1,93 +1,114 @@
 import * as tf from '@tensorflow/tfjs';
-import '@tensorflow/tfjs-backend-webgpu';
+import { isWebGPUSupported } from '../utils/common.js';
 
 export class DetectionService {
   constructor() {
     this.model = null;
     this.labels = [];
-    this.config = {
-      modelUrl: '/model/model.json',
-      metadataUrl: '/model/metadata.json',
-    };
+    this.config = null;
+    this.currentBackend = null;
   }
 
-  async loadModel() {
+  // TODO [Basic] Muat model dan metadata secara bersamaan, lalu simpan ke instance
+  // TODO [Advance] Implementasikan strategi Backend Adaptive
+  async loadModel(onProgress) {
     try {
-      // Adaptive Backend: Try WebGPU, then WebGL, then CPU
-      if (navigator.gpu) {
+      // Backend Adaptif: cek navigator.gpu -> WebGPU, fallback ke WebGL
+      if (isWebGPUSupported()) {
         try {
           await tf.setBackend('webgpu');
-          console.log('Using WebGPU backend');
+          await tf.ready();
+          this.currentBackend = 'webgpu';
+          console.log('✅ DetectionService: Menggunakan backend WebGPU');
         } catch (e) {
-          console.warn('WebGPU failed, falling back to WebGL', e);
+          console.warn('⚠️ WebGPU gagal, fallback ke WebGL:', e);
           await tf.setBackend('webgl');
+          await tf.ready();
+          this.currentBackend = 'webgl';
+          console.log('✅ DetectionService: Fallback ke backend WebGL');
         }
       } else {
         await tf.setBackend('webgl');
-        console.log('Using WebGL backend');
+        await tf.ready();
+        this.currentBackend = 'webgl';
+        console.log('✅ DetectionService: Menggunakan backend WebGL');
       }
-      await tf.ready();
 
-      // Load model and metadata
+      if (onProgress) onProgress(20);
+
+      // Muat model dan metadata secara bersamaan
+      // Model ini adalah Teachable Machine (Layers model), bukan Graph model
       const [model, metadataResponse] = await Promise.all([
-        tf.loadLayersModel(this.config.modelUrl),
-        fetch(this.config.metadataUrl),
+        tf.loadLayersModel('/model/model.json'),
+        fetch('/model/metadata.json'),
       ]);
 
-      const metadata = await metadataResponse.json();
+      if (onProgress) onProgress(40);
 
       this.model = model;
-      this.labels = metadata.labels || [];
 
-      console.log('Model loaded successfully with labels:', this.labels);
-      return { model, labels: this.labels };
+      const metadata = await metadataResponse.json();
+      if (metadata && metadata.labels) {
+        this.labels = metadata.labels;
+      }
+
+      if (onProgress) onProgress(50);
+
+      console.log(`✅ DetectionService: Model dimuat. Labels: ${this.labels.length}`, this.labels);
+      return true;
     } catch (error) {
-      console.error('Error loading model:', error);
+      console.error('❌ Gagal memuat model deteksi:', error);
       throw error;
     }
   }
 
+  // TODO [Basic] Lakukan prediksi pada elemen gambar yang diberikan dan kembalikan hasilnya
   async predict(imageElement) {
     if (!this.model) {
-      throw new Error('Model not loaded');
+      throw new Error('Model belum dimuat');
     }
 
-    // Memory Management: Use tf.tidy to clean up tensors
-    return tf.tidy(() => {
+    try {
+      // Ubah elemen gambar/video menjadi tensor (input 224x224 sesuai metadata)
       const tensor = tf.browser
         .fromPixels(imageElement)
-        .resizeNearestNeighbor([224, 224]) // TM models usually use 224x224
-        .toFloat()
-        .expandDims();
+        .resizeBilinear([224, 224])
+        .expandDims(0)
+        .div(255.0);
 
-      // Teachable Machine models usually expect normalization
-      const normalizedTensor = tensor.div(127.5).sub(1);
+      // Jalankan prediksi
+      const predictions = this.model.predict(tensor);
+      const data = await predictions.data();
 
-      const predictions = this.model.predict(normalizedTensor);
-      const probabilities = predictions.dataSync();
-
-      // Find the label with highest probability
-      let maxProb = -1;
-      let labelIdx = -1;
-
-      for (let i = 0; i < probabilities.length; i++) {
-        if (probabilities[i] > maxProb) {
-          maxProb = probabilities[i];
-          labelIdx = i;
+      // Cari indeks dengan skor tertinggi
+      let maxIndex = 0;
+      let maxScore = data[0];
+      for (let i = 1; i < data.length; i++) {
+        if (data[i] > maxScore) {
+          maxScore = data[i];
+          maxIndex = i;
         }
       }
 
+      // Bersihkan tensor
+      tensor.dispose();
+      predictions.dispose();
+
+      const className = this.labels[maxIndex] || `class_${maxIndex}`;
+
       return {
-        className: this.labels[labelIdx] || 'Unknown',
-        score: maxProb,
-        confidence: Math.round(maxProb * 100),
-        isValid: labelIdx !== -1,
-        allPredictions: probabilities,
+        className,
+        score: maxScore,
+        isValid: maxScore > 0.3,
       };
-    });
+    } catch (error) {
+      console.error('❌ Gagal melakukan prediksi:', error);
+      throw error;
+    }
   }
 
+  // TODO [Basic] Periksa apakah model sudah dimuat dan siap digunakan
   isLoaded() {
-    return this.model !== null;
+    return !!this.model;
   }
 }

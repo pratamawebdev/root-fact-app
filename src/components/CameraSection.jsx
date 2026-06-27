@@ -9,7 +9,7 @@ function CameraSection({
   services,
   modelStatus,
   error,
-  currentTone,
+  currentTone
 }) {
   const [fps, setFps] = useState(30);
   const [cameraType, setCameraType] = useState('default');
@@ -67,8 +67,12 @@ function CameraSection({
             playsInline
             className={isRunning ? '' : 'hidden'}
           />
-
-          <canvas ref={canvasRef} id="media-canvas" className="hidden" />
+          
+          <canvas
+            ref={canvasRef}
+            id="media-canvas"
+            className="hidden"
+          />
 
           <div className={`camera-overlay ${isRunning ? 'active' : ''}`}>
             <div className="overlay-frame"></div>
@@ -79,13 +83,7 @@ function CameraSection({
               <Camera size={48} />
               <p>Kamera tidak aktif</p>
               {error && (
-                <p
-                  style={{
-                    color: '#ef4444',
-                    fontSize: '0.8125rem',
-                    marginTop: '0.5rem',
-                  }}
-                >
+                <p style={{ color: '#ef4444', fontSize: '0.8125rem', marginTop: '0.5rem' }}>
                   {error}
                 </p>
               )}
@@ -97,7 +95,7 @@ function CameraSection({
           <button
             id="btn-toggle"
             className={`capture-btn ${isRunning ? 'scanning' : ''}`}
-            onClick={() => onToggleCamera(cameraType)}
+            onClick={onToggleCamera}
             disabled={buttonDisabled}
             aria-label={buttonText}
             style={{ opacity: buttonDisabled ? 0.6 : 1 }}
@@ -142,7 +140,7 @@ function CameraSection({
               onChange={handleToneChange}
               disabled={isRunning}
             >
-              {TONE_CONFIG.availableTones.map((option) => (
+              {TONE_CONFIG.availableTones.map(option => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

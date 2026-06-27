@@ -1,21 +1,6 @@
-import {
-  Sparkles,
-  Search,
-  CheckCircle,
-  Lightbulb,
-  Copy,
-  Share2,
-  RefreshCw,
-} from 'lucide-react';
+import { Sparkles, Search, CheckCircle, Lightbulb, Copy, Share2 } from 'lucide-react';
 
-function InfoPanel({
-  appState,
-  detectionResult,
-  funFactData,
-  error,
-  onCopyFact,
-  onReset,
-}) {
+function InfoPanel({ appState, detectionResult, funFactData, error, onCopyFact }) {
   const isIdle = appState === 'idle';
   const isAnalyzing = appState === 'analyzing';
   const isResult = appState === 'result';
@@ -26,14 +11,9 @@ function InfoPanel({
         <Sparkles size={40} />
       </div>
       <h2>Scan Sayuran</h2>
-      <p>
-        Ketuk tombol di bawah untuk memulai dan temukan fakta menarik tentang
-        sayuran!
-      </p>
+      <p>Ketuk tombol di bawah untuk memulai dan temukan fakta menarik tentang sayuran!</p>
       {error && (
-        <p
-          style={{ color: '#ef4444', fontSize: '0.8125rem', marginTop: '1rem' }}
-        >
+        <p style={{ color: '#ef4444', fontSize: '0.8125rem', marginTop: '1rem' }}>
           {error}
         </p>
       )}
@@ -70,17 +50,14 @@ function InfoPanel({
 
       if (funFactData === 'error') {
         return (
-          <div
-            style={{
-              padding: '0.75rem',
-              background: '#fef3c7',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.875rem',
-              color: '#92400e',
-            }}
-          >
-            Gagal menghasilkan fakta menarik. Mode offline atau layanan tidak
-            tersedia.
+          <div style={{ 
+            padding: '0.75rem', 
+            background: '#fef3c7', 
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.875rem',
+            color: '#92400e'
+          }}>
+            Gagal menghasilkan fakta menarik. Mode offline atau layanan tidak tersedia.
           </div>
         );
       }
@@ -119,48 +96,19 @@ function InfoPanel({
         <div className="confidence-bar">
           <span className="confidence-label">Kepercayaan</span>
           <div className="confidence-track">
-            <div
+            <div 
               id="confidence-fill"
-              className="confidence-fill"
+              className="confidence-fill" 
               style={{ width: `${confidence}%` }}
             ></div>
           </div>
-          <span id="detected-confidence" className="confidence-value">
-            {confidence}%
-          </span>
+          <span id="detected-confidence" className="confidence-value">{confidence}%</span>
         </div>
 
         <div className="share-hint">
           <Share2 size={14} />
           <span>Salin dan bagikan ke teman!</span>
         </div>
-
-        <button
-          id="btn-reset"
-          className="reset-btn"
-          onClick={onReset}
-          style={{
-            marginTop: '1.25rem',
-            width: '100%',
-            padding: '0.875rem',
-            background: 'var(--primary)',
-            color: 'white',
-            border: 'none',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '0.625rem',
-            cursor: 'pointer',
-            fontWeight: '600',
-            fontSize: '0.9375rem',
-            boxShadow: 'var(--shadow-md)',
-            transition: 'var(--transition)',
-          }}
-        >
-          <RefreshCw size={18} />
-          <span>Scan Lagi</span>
-        </button>
       </div>
     );
   };

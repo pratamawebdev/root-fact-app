@@ -57,21 +57,3 @@ export const commonStyles = {
     lineHeight: 1
   }
 };
-
-/* ===== Confidence Theme ===== */
-export const getConfidenceTheme = (confidence) => {
-  if (confidence >= 80) return 'theme-green';
-  if (confidence >= 60) return 'theme-yellow';
-  return 'theme-red';
-};
-
-export const getConfidenceTextClass = (confidence) => {
-  if (confidence >= 80) return 'text-green';
-  if (confidence >= 60) return 'text-yellow';
-  return 'text-red';
-};
-
-export const createProgressBarStyle = (percentage, duration = '1s') => ({
-  width: `${percentage}%`,
-  transition: `width ${duration} ease-out`
-});
