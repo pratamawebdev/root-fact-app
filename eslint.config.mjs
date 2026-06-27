@@ -1,36 +1,24 @@
-import daStyle from 'eslint-config-dicodingacademy';
-import pluginReact from 'eslint-plugin-react';
+import js from "@eslint/js";
+import globals from "globals";
 
 export default [
-  daStyle,
+  js.configs.recommended,
   {
-    files: ['**/*.{js,jsx}'],
-    plugins: {
-      react: pluginReact,
-    },
+    files: ["src/**/*.js"],
     languageOptions: {
-      parserOptions: {
-        ecmaVersion: 'latest',
-        sourceType: 'module',
-        ecmaFeatures: {
-          jsx: true,
-        },
-        babelOptions: {
-          presets: ['@babel/preset-react'],
-        },
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        ...globals.browser,
+        lucide: "readonly",
       },
     },
-    settings: {
-      react: {
-        version: 'detect',
-      },
-    },
-    ignores: ['dist', 'node_modules'],
     rules: {
-      ...pluginReact.configs.recommended.rules,
-      'react/react-in-jsx-scope': 'off',
-      'react/prop-types': 'off',
-      'camelcase': 'off',
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "no-console": "off",
     },
+  },
+  {
+    ignores: ["dist/**", "node_modules/**"],
   },
 ];
