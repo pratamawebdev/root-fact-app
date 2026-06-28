@@ -15,16 +15,6 @@ module.exports = merge(common, {
   plugins: [
     new CleanWebpackPlugin(),
 
-    // ─── Inject NODE_ENV so SW registration guard resolves correctly ─────
-    // Webpack ESM output does NOT automatically replace process.env.NODE_ENV.
-    // Without DefinePlugin the condition `process.env.NODE_ENV === 'production'`
-    // stays as a dynamic expression at runtime → evaluates to false → SW is
-    // never registered. DefinePlugin performs a literal text substitution at
-    // build time so the production bundle always registers sw.js.
-    new webpack.DefinePlugin({
-      "process.env.NODE_ENV": JSON.stringify("production"),
-    }),
-
     new WorkboxWebpackPlugin.GenerateSW({
       swDest: "sw.js",
 
@@ -33,6 +23,8 @@ module.exports = merge(common, {
       maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10 MB
 
       cleanupOutdatedCaches: true,
+
+      exclude: [/^_redirects$/],
 
       // ─── Runtime Caching ─────────────────────────────────────────────────
       runtimeCaching: [
